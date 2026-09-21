@@ -1,0 +1,36 @@
+# Planting patterns, ported from the prototype (full4_run.py / full5_fill.py /
+# full6_shrubfill.py). spacing_m doubles as both the along-curb/grid step AND
+# the minimum clearance enforced from points placed by earlier rules of the
+# same plant_type -- same reuse as the prototype's ROW_TREE_SPACING/
+# NEW_TREE_SPACING/HEDGE_SPACING/GROUP_SHRUB_SPACING.
+#
+# HEDGE spacing (1.5m) is the prototype's own documented MVP simplification
+# of a realistic hedge (0.3-0.4m) -- kept as the default here since a
+# realistic hedge produces an order of magnitude more points; override via
+# --planting-rules for a denser hedge on smaller/single objects.
+
+- id: TREE_ROW_CURB
+  plant_type: tree
+  placement: row_along_curb
+  name_ru: "Рядовая/аллейная посадка вдоль борта"
+  spacing_m: 6.0
+  offset_m: 2.2
+
+- id: TREE_FILL_LAWN
+  plant_type: tree
+  placement: grid_fill
+  name_ru: "Групповая/одиночная посадка на свободном газоне"
+  spacing_m: 5.0
+
+- id: SHRUB_HEDGE_CURB
+  plant_type: shrub
+  placement: row_along_curb
+  name_ru: "Живая изгородь вдоль борта"
+  spacing_m: 1.5
+  offset_m: 0.8
+
+- id: SHRUB_FILL_LAWN
+  plant_type: shrub
+  placement: grid_fill
+  name_ru: "Групповая посадка кустарников на свободном газоне"
+  spacing_m: 3.0

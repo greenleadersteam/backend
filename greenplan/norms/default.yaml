@@ -1,0 +1,75 @@
+# 743-ПП setback distances (meters), ported from the prior agent's prototype
+# (Олимпийская деревня/Результат_агента/код_и_контекст/full4_run.py's
+# NORMS/CURB_NORM/EXIST_TREE_SPACING + full7_assemble.py's REFS), sourced from
+# "Правила размещения растений в городской среде.xlsx".
+#
+# No article/clause numbers are available in the source data -- citations are
+# act name + free-text table row, exactly as the prototype recorded them.
+#
+# Known data-quality caveats (kept from the prototype rather than silently
+# "fixed", since they're the best evidence currently available):
+#   - existing_tree tree_m (5.0) was recovered from a corrupted Excel cell:
+#     the original range was "5-6" m, misread by Excel as a date; the lower
+#     (more conservative) bound was kept.
+#   - gas/sewer/drainage/water/other_utility shrub_m values have no separate
+#     source number and conservatively reuse the tree_m value.
+
+- obstacle_category: underground_utilities
+  obstacle_subtype: gas
+  tree_m: 1.5
+  shrub_m: 1.5
+  citation: "743-ПП — газопровод"
+
+- obstacle_category: underground_utilities
+  obstacle_subtype: heat
+  tree_m: 2.0
+  shrub_m: 1.0
+  citation: "743-ПП — тепловая сеть"
+
+- obstacle_category: underground_utilities
+  obstacle_subtype: water
+  tree_m: 2.0
+  shrub_m: 2.0
+  citation: "743-ПП — водопровод, дренаж"
+
+- obstacle_category: underground_utilities
+  obstacle_subtype: drainage
+  tree_m: 2.0
+  shrub_m: 2.0
+  citation: "743-ПП — водопровод, дренаж"
+
+- obstacle_category: underground_utilities
+  obstacle_subtype: sewer
+  tree_m: 1.5
+  shrub_m: 1.5
+  citation: "743-ПП — канализация, водосток"
+
+- obstacle_category: underground_utilities
+  obstacle_subtype: power_cable
+  tree_m: 2.0
+  shrub_m: 0.7
+  citation: "743-ПП — силовой кабель и кабель связи"
+
+- obstacle_category: underground_utilities
+  obstacle_subtype: comm_cable
+  tree_m: 2.0
+  shrub_m: 0.7
+  citation: "743-ПП — силовой кабель и кабель связи"
+
+- obstacle_category: underground_utilities
+  obstacle_subtype: other_utility
+  tree_m: 2.0
+  shrub_m: 2.0
+  citation: "743-ПП — неопознанная подземная сеть (консервативная норма)"
+
+- obstacle_category: road_edge
+  obstacle_subtype: null
+  tree_m: 0.7
+  shrub_m: 0.5
+  citation: "743-ПП — край тротуара/бортовой камень"
+
+- obstacle_category: green_existing
+  obstacle_subtype: existing_tree
+  tree_m: 5.0
+  shrub_m: 1.5
+  citation: "743-ПП — расстояние между озеленением, однорядная посадка (значение восстановлено из повреждённой Excel-ячейки, взята консервативная нижняя граница диапазона 5-6м)"

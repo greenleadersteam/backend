@@ -1,0 +1,130 @@
+# Default rule pack, ported from the original backend/dxf_layers.py RULES
+# table (MVP subset of the 21-item regulatory requirement list: Group 0
+# (1-2), Group 1 (3-7), cheap Group 2 (8, 11, 12), red lines & contours (19,
+# 20 partial)).
+#
+# Matching is tried against the entity's own layer name, then (for INSERT
+# entities only) against the referenced block name, first rule wins.
+#
+# expand_blocks: some buildings/utilities/walls are drawn as block
+# references rather than raw polylines; for those the block's own geometry
+# is the real shape, so a matching INSERT should be exploded into its child
+# geometry instead of reduced to its insertion point. Point-symbol
+# categories (trees, poles, wells) leave this unset on purpose: the
+# insertion point *is* the meaningful data there.
+#
+# status documents how much to trust an automatic match:
+#   auto                 - name is a confirmed, stable convention across projects
+#   auto_partial         - layer itself is reliable, but the requirement asks for
+#                           more than this layer alone provides
+#   proxy_low_confidence - no dedicated layer exists for the exact requirement;
+#                           this is the closest available stand-in
+#   no_default_source    - no confirmed layer name exists in projects inspected
+#                           so far; kept so the tool still finds it where it
+#                           exists, expect zero matches on many inputs
+
+- id: "1"
+  key: site_boundary
+  name_ru: "Граница участка проектирования"
+  group: 0
+  status: auto
+  layer_pattern: "границ.*работ"
+
+- id: "3"
+  key: underground_utilities
+  name_ru: "Подземные инженерные сети"
+  group: 1
+  status: auto
+  layer_pattern: "газопровод|канализац|водосток|водопровод|дренаж|теплосет|кабел|коллектор|подземн.*коммуникац"
+  expand_blocks: true
+  subtypes:
+    - {key: gas, pattern: "газопровод"}
+    - {key: sewer, pattern: "канализац|водосток"}
+    - {key: water, pattern: "водопровод"}
+    - {key: drainage, pattern: "дренаж"}
+    - {key: heat, pattern: "теплосет"}
+    - {key: power_cable, pattern: "кабел.*электр"}
+    - {key: comm_cable, pattern: "кабел.*связ"}
+    - {key: other_utility, pattern: "кабел|коллектор|подземн.*коммуникац"}
+
+- id: "4"
+  key: buildings
+  name_ru: "Здания и сооружения"
+  group: 1
+  status: auto
+  layer_pattern: "^(Здания|Части зданий)$"
+  expand_blocks: true
+
+- id: "5"
+  key: road_edge
+  name_ru: "Улично-дорожная сеть (край проезжей части — прокси: бортовой камень/kerb)"
+  group: 1
+  status: proxy_low_confidence
+  layer_pattern: "бортовой камень|\\bkerb\\b|\\bcurb\\b"
+  expand_blocks: true
+
+- id: "6"
+  key: footpath_edge
+  name_ru: "Дорожно-тропиночная сеть и тротуары (край покрытия)"
+  group: 1
+  status: no_default_source
+  layer_pattern: "тротуар|дорожно.?тропин|пешеход|sidewalk"
+
+- id: "7"
+  key: green_existing
+  name_ru: "Существующие зелёные насаждения"
+  group: 1
+  status: auto
+  layer_pattern: "дендр|отдельно сто.*дерев|полоса дерев|газон|гзн|\\bgrass\\b|кустарник"
+  subtypes:
+    # "гзн" catches the abbreviated zone-fill-diagram HATCH layers (e.g.
+    # "_ГЗН-ГЗН", "_АБ ТР-ГЗН") that a dedicated landscaping "Заливка"/fill
+    # file uses for the actual plantable lawn extent -- this is the reliable
+    # lawn-area source (confirmed by a prior agent's session), unlike a raw
+    # topo-survey "Леса и газоны" layer, which mixes a few real fills with
+    # many tiny decorative grass-symbol strokes (LINE/ARC/POINT ticks, plus
+    # occasional small closed loops) that are not real area boundaries.
+    # "grass" (English) catches a different provider's own zone-fill-diagram
+    # convention (e.g. "!Project_hatch road grass") -- same concept, another
+    # naming dialect; this is exactly the kind of per-provider gap the rule
+    # pack is meant to absorb without a code change.
+    - {key: lawn, pattern: "газон|гзн|\\bgrass\\b"}
+    - {key: existing_tree, pattern: "дендр|отдельно сто.*дерев"}
+    - {key: tree_strip, pattern: "полоса дерев"}
+    - {key: shrub_existing, pattern: "кустарник"}
+
+- id: "8"
+  key: poles_masts
+  name_ru: "Опоры и мачты"
+  group: 2
+  status: auto
+  layer_pattern: "опор|мачт|колонн"
+
+- id: "11"
+  key: retaining_walls_slopes
+  name_ru: "Подпорные стенки, откосы, террасы"
+  group: 2
+  status: auto
+  layer_pattern: "откос|подпорн.*стенк|терас|террас"
+  expand_blocks: true
+
+- id: "12"
+  key: wells_hatches
+  name_ru: "Колодцы, люки, камеры, дождеприёмники"
+  group: 2
+  status: auto
+  layer_pattern: "колодц|люк|дождеприемник|дождеприёмник|камера смотр"
+
+- id: "19"
+  key: red_lines
+  name_ru: "Красные линии (без кадастровых границ)"
+  group: 4
+  status: auto_partial
+  layer_pattern: "^Красные линии$"
+
+- id: "20"
+  key: contours
+  name_ru: "Рельеф — горизонтали (без вычисления уклонов)"
+  group: 4
+  status: auto_partial
+  layer_pattern: "^Горизонтали$"
