@@ -13,6 +13,18 @@ services:
       GREENPLAN_API_DATA_DIR: /data
       GREENPLAN_API_MAX_CONCURRENT_JOBS: "2"
       GREENPLAN_API_MAX_UPLOAD_MB: "100"
+      # Comma-separated browser origins allowed to call this API. The
+      # localhost/127.0.0.1 dev-server entries here are harmless in
+      # production -- they only let *your own* frontend dev server (running
+      # on a developer's own machine) call the deployed API, not arbitrary
+      # third-party sites. See config.py's default for the full list this
+      # overrides.
+      GREENPLAN_API_CORS_ORIGINS: >-
+        https://app.greenleaders.online,
+        http://localhost:5173,http://127.0.0.1:5173,
+        http://localhost:3000,http://127.0.0.1:3000,
+        http://localhost:4200,http://127.0.0.1:4200,
+        http://localhost:8080,http://127.0.0.1:8080
     volumes:
       - backend_data:/data
     networks: [internal]
@@ -21,7 +33,7 @@ services:
   #   build: ./frontend             # level to sit next to both repos, see
   #   restart: unless-stopped       # the comment at the top of this file
   #   environment:
-  #     API_BASE_URL: https://api.example.com
+  #     API_BASE_URL: https://backend.greenleaders.online
   #   networks: [internal]
 
   caddy:

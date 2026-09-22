@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from greenplan.api import jobs
@@ -193,6 +194,12 @@ def create_app(
             executor.shutdown(wait=False)
 
     app = FastAPI(title="greenplan API", lifespan=lifespan)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins_list,
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
+        allow_headers=["*"],
+    )
     app.include_router(router)
     return app
 
