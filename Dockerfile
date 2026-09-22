@@ -12,10 +12,20 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# Dependencies first, app code second, deliberately separate layers: this
+# repo gets auto-rebuilt on every push (see .github/workflows/deploy.yml),
+# and greenplan/ changes on essentially every commit while
+# [project.dependencies] rarely does. Installing deps from pyproject.toml
+# alone -- before greenplan/ is even copied in -- means a normal code-only
+# push reuses this cached layer and skips re-downloading/reinstalling the
+# whole geo stack (shapely/geopandas/scipy/...) from PyPI every time.
 COPY pyproject.toml ./
-COPY greenplan ./greenplan
+RUN python -c "import tomllib; print('\n'.join(tomllib.load(open('pyproject.toml', 'rb'))['project']['dependencies']))" \
+    > requirements.txt \
+    && pip install --no-cache-dir -r requirements.txt
 
-RUN pip install --no-cache-dir .
+COPY greenplan ./greenplan
+RUN pip install --no-cache-dir --no-deps .
 
 RUN useradd --create-home --uid 1000 greenplan \
     && mkdir -p /data \

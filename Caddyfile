@@ -1,18 +1,16 @@
-# Replace api.example.com with your real subdomain, pointed at this VM's
-# IP via an A/AAAA record *before* starting caddy -- it requests a
-# Let's Encrypt certificate for whatever hostname it sees here, and that
-# only succeeds if the domain already resolves to this machine and ports
-# 80/443 are reachable from the internet (HTTP-01 challenge).
+# backend.greenleaders.online must already resolve (A/AAAA) to this VM's
+# IP, with ports 80/443 reachable from the internet, *before* starting
+# caddy -- it requests its Let's Encrypt certificate for this hostname on
+# first request (HTTP-01 challenge).
 #
 # No client-body size limit is set: Caddy has none by default (unlike
 # nginx's 1MB client_max_body_size), so the API's own 100MB upload limit
 # (GREENPLAN_API_MAX_UPLOAD_MB) is the only one in effect.
-api.example.com {
+backend.greenleaders.online {
     reverse_proxy backend:8000
 }
 
-# Once the frontend is added as a second service (see docker-compose.yml),
-# add its subdomain here too:
-# app.example.com {
+# Once the frontend is added as a second service (see docker-compose.yml):
+# app.greenleaders.online {
 #     reverse_proxy frontend:3000
 # }

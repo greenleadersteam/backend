@@ -1,0 +1,34 @@
+name: Deploy backend
+
+# Push-triggered, builds on the VM itself (docker-compose.yml's `build: .`),
+# not in CI -- no container registry needed. This keeps the same
+# `docker compose up -d --build` flow documented in DEPLOY.md §6 for manual
+# deploys; this workflow just runs that command over SSH instead of you
+# running it by hand. See DEPLOY.md's "Continuous deployment" section for
+# one-time VM/secrets setup.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}   # lets you trigger a redeploy manually from the Actions tab
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Deploy over SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" '
+            set -e
+            cd /opt/greenplan/backend
+            git fetch origin main
+            git reset --hard origin/main
+            docker compose up -d --build backend
+            docker image prune -f
+          '
