@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# greenplan API's default local data_dir (GREENPLAN_API_DATA_DIR): uploaded
+# projects, extracted DXFs, processed output -- never meant to be committed
+/data/
