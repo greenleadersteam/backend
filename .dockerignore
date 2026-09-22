@@ -1,0 +1,10 @@
+# Allowlist, not a denylist: this directory accumulates large ad hoc
+# artifacts (real pilot-object exports, downloaded rasters/overture data,
+# a local `data/` from testing the API) that must never end up in a build
+# context. Only what the image actually needs is re-included below.
+*
+!greenplan/
+!greenplan/**
+!pyproject.toml
+greenplan/**/__pycache__
+greenplan/**/*.pyc
