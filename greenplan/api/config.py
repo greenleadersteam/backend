@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     data_dir: Path = Path("data")
     max_concurrent_jobs: int = Field(default=2, ge=1)
-    max_upload_mb: int = Field(default=100, ge=1)
+    max_upload_mb: int = Field(default=300, ge=1)
     # Comma-separated, not a JSON list: this is meant to be set from a single
     # plain env var (e.g. in docker-compose.yml's `environment:` block)
     # without needing shell-quoted JSON. `localhost`/`127.0.0.1` are distinct

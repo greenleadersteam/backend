@@ -28,7 +28,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from greenplan.api._yamlio import atomic_write_yaml, read_yaml
 
@@ -86,6 +86,19 @@ class JobRecord(BaseModel):
     error: JobError | None = None
     started_at: datetime
     finished_at: datetime | None = None
+
+    @field_validator("error", mode="before")
+    @classmethod
+    def _upgrade_legacy_string_error(cls, value):
+        """job.yaml files written before `error` became a structured JobError
+        (a plain `f"{type}: {exc}"` string) still exist on disk from before
+        this change -- reconcile_interrupted_jobs reads every project's
+        job.yaml on every server startup, so leaving one of these unreadable
+        would crash startup for *all* projects, not just the affected one.
+        """
+        if isinstance(value, str):
+            return {"code": UploadErrorCode.OTHER, "message": value}
+        return value
 
 
 def _now() -> datetime:

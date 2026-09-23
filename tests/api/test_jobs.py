@@ -188,6 +188,26 @@ def test_classify_error_ambiguous_root_falls_back_to_name_outside_raw_dir(tmp_pa
     assert error.candidates == ["weird.dxf"]
 
 
+def test_read_job_record_upgrades_legacy_plain_string_error(tmp_path):
+    """Regression test: job.yaml files written before `error` became a
+    structured JobError stored it as a bare string. reconcile_interrupted_jobs
+    reads every project's job.yaml at server startup, so a record in this old
+    format must not fail validation (that would crash startup for every
+    project, not just the one with an old-format record).
+    """
+    jobs._write_stage(tmp_path, stage=jobs.STAGE_FAILED, started_at=jobs._now())
+    from greenplan.api._yamlio import atomic_write_yaml
+
+    raw = jobs._job_path(tmp_path)
+    data = jobs.read_yaml(raw)
+    data["error"] = "SystemExit: No .dxf files found under /some/raw"
+    atomic_write_yaml(raw, data)
+
+    record = jobs.read_job_record(tmp_path)
+    assert record.error.code == jobs.UploadErrorCode.OTHER
+    assert record.error.message == "SystemExit: No .dxf files found under /some/raw"
+
+
 def test_classify_error_other_fallback(tmp_path):
     error = jobs._classify_error(RuntimeError("something else entirely"), tmp_path)
     assert error.code == jobs.UploadErrorCode.OTHER
