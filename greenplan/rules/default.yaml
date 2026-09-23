@@ -52,7 +52,12 @@
   name_ru: "Здания и сооружения"
   group: 1
   status: auto
-  layer_pattern: "^(Здания|Части зданий)$"
+  # Not full-string-anchored (unlike an earlier version of this rule): a
+  # provider that binds an xref instead of leaving it external renames the
+  # child layer to "<original-name>|Здания" or "<original-name>$0$Здания"
+  # (confirmed on real objects), which a "^...$" anchor never matches even
+  # though the content is exactly the same category.
+  layer_pattern: "Здания|Части зданий"
   expand_blocks: true
 
 - id: "5"
@@ -120,11 +125,29 @@
   name_ru: "Красные линии (без кадастровых границ)"
   group: 4
   status: auto_partial
-  layer_pattern: "^Красные линии$"
+  # See rule "4"'s comment: not full-string-anchored, so a bound-xref
+  # child layer like "...|КРАСНЫЕ_ЛИНИИ_Красные линии" still matches.
+  layer_pattern: "Красные линии"
 
 - id: "20"
   key: contours
   name_ru: "Рельеф — горизонтали (без вычисления уклонов)"
   group: 4
   status: auto_partial
-  layer_pattern: "^Горизонтали$"
+  # See rule "4"'s comment: not full-string-anchored, so a bound-xref
+  # child layer like "output[1-8]_..._tp$0$Горизонтали" still matches.
+  layer_pattern: "Горизонтали"
+
+- id: "90"
+  key: geodetic_points
+  name_ru: "Геодезические пункты (опорные точки топографической съёмки)"
+  group: 4
+  status: auto
+  # Not one of the ТЗ's numbered requirement items (hence id 90, well outside
+  # the 1-20 range used above) -- kept purely as a tracked/exported category
+  # rather than falling into "unmatched", since a point-based DXF
+  # georeferencing workflow depends on being able to find these
+  # automatically. Confirmed as a stable literal layer name (modulo the same
+  # bound-xref prefix noise as above) across the large majority of pilot
+  # objects inspected so far.
+  layer_pattern: "геодезич.*пункт"

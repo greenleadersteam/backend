@@ -24,6 +24,7 @@ import traceback
 import zipfile
 from concurrent.futures import Executor, Future
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Callable
 
@@ -57,10 +58,32 @@ _STAGE_PROGRESS = {
 }
 
 
+class UploadErrorCode(str, Enum):
+    BAD_ARCHIVE = "bad_archive"  # not a zip, or corrupted
+    NO_DXF_FOUND = "no_dxf_found"  # extracted fine, but zero .dxf files inside
+    AMBIGUOUS_ROOT_DXF = "ambiguous_root_dxf"  # more than one plausible root drawing
+    OTHER = "other"
+
+
+class JobError(BaseModel):
+    code: UploadErrorCode
+    message: str
+    # Only populated for AMBIGUOUS_ROOT_DXF: candidate root files, as paths
+    # relative to the zip root (never the server's absolute filesystem path).
+    candidates: list[str] | None = None
+
+
+class UnsafeArchiveError(ValueError):
+    """Raised by _safe_extract_zip for a zip-slip ('../') path traversal
+    attempt -- classified the same as a corrupted/invalid zip (see
+    _classify_error): either way, the uploaded archive isn't usable as-is.
+    """
+
+
 class JobRecord(BaseModel):
     stage: str
     progress_pct: int
-    error: str | None = None
+    error: JobError | None = None
     started_at: datetime
     finished_at: datetime | None = None
 
@@ -95,7 +118,7 @@ def mark_queued(project_dir: Path) -> None:
     _write_stage(project_dir, stage=STAGE_QUEUED, started_at=_now())
 
 
-def _write_stage(project_dir: Path, *, stage: str, started_at: datetime, error: str | None = None) -> None:
+def _write_stage(project_dir: Path, *, stage: str, started_at: datetime, error: JobError | None = None) -> None:
     record = JobRecord(
         stage=stage,
         progress_pct=_STAGE_PROGRESS[stage],
@@ -116,8 +139,40 @@ def _safe_extract_zip(zip_path: Path, dest_dir: Path) -> None:
         for member in zf.infolist():
             target = (dest_dir / member.filename).resolve()
             if target != dest_dir and dest_dir not in target.parents:
-                raise ValueError(f"Unsafe path in archive: {member.filename!r}")
+                raise UnsafeArchiveError(f"Unsafe path in archive: {member.filename!r}")
         zf.extractall(dest_dir)
+
+
+def _classify_error(exc: BaseException, raw_dir: Path) -> JobError:
+    """Turn a pipeline/extraction exception into a structured, API-facing
+    error code instead of a bare exception-repr string.
+
+    The DXF-specific exception types are imported here rather than at module
+    level for the same reason as run_processing_job's own imports (see its
+    docstring): this function is only ever called from within that worker
+    function, so deferring the import keeps ezdxf out of the lightweight API
+    process that imports this module on every status-check request.
+    """
+    from greenplan.io.dxf_source import NoDxfFilesError, RootDetectionError
+
+    if isinstance(exc, (zipfile.BadZipFile, UnsafeArchiveError)):
+        return JobError(code=UploadErrorCode.BAD_ARCHIVE, message=str(exc))
+    if isinstance(exc, NoDxfFilesError):
+        return JobError(code=UploadErrorCode.NO_DXF_FOUND, message=str(exc))
+    if isinstance(exc, RootDetectionError):
+        resolved_raw_dir = raw_dir.resolve()
+        candidates = []
+        for p in exc.candidates:
+            try:
+                candidates.append(str(p.relative_to(resolved_raw_dir)))
+            except ValueError:
+                candidates.append(p.name)
+        return JobError(
+            code=UploadErrorCode.AMBIGUOUS_ROOT_DXF,
+            message=str(exc),
+            candidates=candidates,
+        )
+    return JobError(code=UploadErrorCode.OTHER, message=f"{type(exc).__name__}: {exc}")
 
 
 def run_processing_job(project_dir: Path) -> None:
@@ -180,7 +235,7 @@ def run_processing_job(project_dir: Path) -> None:
             project_dir,
             stage=STAGE_FAILED,
             started_at=started_at,
-            error=f"{type(exc).__name__}: {exc}",
+            error=_classify_error(exc, raw_dir),
         )
 
 
@@ -235,7 +290,7 @@ class JobManager:
             project_dir,
             stage=STAGE_FAILED,
             started_at=started_at,
-            error=f"Worker process failed: {exc!r}",
+            error=JobError(code=UploadErrorCode.OTHER, message=f"Worker process failed: {exc!r}"),
         )
 
 
@@ -257,5 +312,5 @@ def reconcile_interrupted_jobs(projects_root: Path) -> None:
             project_dir,
             stage=STAGE_FAILED,
             started_at=record.started_at,
-            error="Interrupted by server restart",
+            error=JobError(code=UploadErrorCode.OTHER, message="Interrupted by server restart"),
         )

@@ -122,6 +122,8 @@ async def upload_project(project_id: str, request: Request) -> ProjectResponse:
                 if size > settings.max_upload_bytes:
                     raise HTTPException(status_code=413, detail="Upload exceeds the maximum allowed size")
                 f.write(chunk)
+        if size == 0:
+            raise HTTPException(status_code=400, detail="No file body provided")
         tmp_dest.replace(dest)
         jobs.mark_queued(project_dir)
         job_manager.submit(project_dir)

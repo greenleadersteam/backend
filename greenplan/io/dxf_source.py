@@ -21,6 +21,14 @@ import ezdxf.recover
 class RootDetectionError(SystemExit):
     """Raised when the root drawing can't be unambiguously auto-detected."""
 
+    def __init__(self, message: str, candidates: list[Path] | None = None):
+        super().__init__(message)
+        self.candidates: list[Path] = candidates or []
+
+
+class NoDxfFilesError(SystemExit):
+    """Raised when a folder (or an extracted archive) contains no .dxf files at all."""
+
 
 def log(msg: str) -> None:
     print(msg, file=sys.stderr)
@@ -57,11 +65,21 @@ def detect_root(files: list[Path]) -> Path:
     for --root instead of guessing.
     """
     xrefs_by_file: dict[Path, set[str]] = {}
+    entity_counts: dict[Path, int] = {}
     for f in files:
         try:
-            xrefs_by_file[f] = get_xref_block_names(load_doc(f))
+            doc = load_doc(f)
         except Exception as ex:
             log(f"WARN: could not open {f}: {ex}")
+            continue
+        try:
+            xrefs_by_file[f] = get_xref_block_names(doc)
+        except Exception as ex:
+            log(f"WARN: could not read xrefs from {f}: {ex}")
+        try:
+            entity_counts[f] = len(doc.modelspace())
+        except Exception:
+            entity_counts[f] = 0
 
     referenced_stems = {name.lower() for refs in xrefs_by_file.values() for name in refs}
     candidates = [
@@ -75,10 +93,31 @@ def detect_root(files: list[Path]) -> Path:
     if not candidates and len(files) == 1:
         return files[0]
 
+    if not candidates:
+        # No file has an *unresolved* xref at all -- e.g. every xref in this
+        # delivery was bound into its file rather than kept external, so the
+        # primary heuristic above (references others, isn't itself
+        # referenced) has nothing to key off. Fall back to files that are at
+        # least unreferenced and carry real content; still only auto-picks
+        # when that narrows to exactly one, so a delivery with two genuinely
+        # independent standalone files (confirmed to occur in practice) stays
+        # correctly ambiguous rather than silently guessing between them.
+        candidates = [
+            f for f in files
+            if f.stem.lower() not in referenced_stems and entity_counts.get(f, 0) > 0
+        ]
+        if len(candidates) == 1:
+            log(f"Root drawing detected (self-contained, no unresolved xrefs): {candidates[0]}")
+            return candidates[0]
+
+    candidate_files = candidates or files
     log("Could not unambiguously detect the root drawing. Candidates:")
-    for f in candidates or files:
+    for f in candidate_files:
         log(f"  {f}")
-    raise RootDetectionError("Pass --root <file> to pick the main drawing explicitly.")
+    raise RootDetectionError(
+        "Pass --root <file> to pick the main drawing explicitly.",
+        candidates=candidate_files,
+    )
 
 
 def resolve_xref(name: str, root_file: Path) -> Path | None:

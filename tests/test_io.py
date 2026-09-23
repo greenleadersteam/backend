@@ -72,3 +72,53 @@ def test_detect_root_raises_with_multiple_candidates(tmp_path, monkeypatch):
 
     with pytest.raises(SystemExit):
         dxf_source.detect_root([a, b])
+
+
+class _FakeDocWithEntityCount:
+    """Stand-in for an ezdxf Document exposing just what detect_root's Tier-2
+    (self-contained-root) heuristic reads: modelspace() -> something with len().
+    """
+
+    def __init__(self, n_entities: int):
+        self._n = n_entities
+
+    def modelspace(self):
+        return list(range(self._n))
+
+
+def test_detect_root_self_contained_root_with_empty_sibling(tmp_path, monkeypatch):
+    """A root with everything already bound in (no *unresolved* xrefs at all) has
+    an empty xref set, so it's invisible to the primary heuristic (which requires
+    refs to be non-empty). If it's the only file among several that actually
+    carries content, it should still be picked automatically rather than forcing
+    a --root prompt for a case with only one sensible answer.
+    """
+    root_file = tmp_path / "root.dxf"
+    empty_aux = tmp_path / "empty_aux.dxf"
+    root_file.touch()
+    empty_aux.touch()
+
+    docs = {root_file: _FakeDocWithEntityCount(50), empty_aux: _FakeDocWithEntityCount(0)}
+    monkeypatch.setattr(dxf_source, "load_doc", lambda path: docs[path])
+    monkeypatch.setattr(dxf_source, "get_xref_block_names", lambda doc: set())
+
+    assert dxf_source.detect_root([root_file, empty_aux]) == root_file
+
+
+def test_detect_root_stays_ambiguous_with_two_independent_self_contained_files(tmp_path, monkeypatch):
+    """Two genuinely independent, self-contained files with real content each
+    (no xref link either way -- confirmed to occur in practice, e.g. a separate
+    genplan and dendroplan delivered with no xref web between them) must stay
+    ambiguous rather than the Tier-2 fallback silently picking one.
+    """
+    a = tmp_path / "genplan.dxf"
+    b = tmp_path / "dendroplan.dxf"
+    a.touch()
+    b.touch()
+
+    docs = {a: _FakeDocWithEntityCount(10), b: _FakeDocWithEntityCount(10)}
+    monkeypatch.setattr(dxf_source, "load_doc", lambda path: docs[path])
+    monkeypatch.setattr(dxf_source, "get_xref_block_names", lambda doc: set())
+
+    with pytest.raises(SystemExit):
+        dxf_source.detect_root([a, b])

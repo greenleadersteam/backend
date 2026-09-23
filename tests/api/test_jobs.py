@@ -1,10 +1,12 @@
 import time
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from greenplan.api import jobs
 from greenplan.api.jobs import JobManager
+from greenplan.io.dxf_source import NoDxfFilesError, RootDetectionError
 
 
 def _poll_until(predicate, timeout=5.0, interval=0.02):
@@ -61,7 +63,8 @@ def test_manager_records_failure_if_job_fn_raises_without_writing_job_yaml(tmp_p
 
     assert _poll_until(lambda: jobs.read_job_record(tmp_path).stage == jobs.STAGE_FAILED)
     record = jobs.read_job_record(tmp_path)
-    assert "boom" in record.error
+    assert record.error.code == jobs.UploadErrorCode.OTHER
+    assert "boom" in record.error.message
 
 
 def test_manager_does_not_overwrite_a_terminal_job_yaml_on_crash(tmp_path):
@@ -94,7 +97,7 @@ def test_run_processing_job_writes_failed_on_bad_upload(tmp_path):
 
     record = jobs.read_job_record(tmp_path)
     assert record.stage == jobs.STAGE_FAILED
-    assert record.error
+    assert record.error.code == jobs.UploadErrorCode.BAD_ARCHIVE
 
 
 def test_reconcile_interrupted_jobs_marks_non_terminal_stages_failed(tmp_path):
@@ -113,7 +116,7 @@ def test_reconcile_interrupted_jobs_marks_non_terminal_stages_failed(tmp_path):
     jobs.reconcile_interrupted_jobs(projects_root)
 
     assert jobs.read_job_record(stuck).stage == jobs.STAGE_FAILED
-    assert "restart" in jobs.read_job_record(stuck).error.lower()
+    assert "restart" in jobs.read_job_record(stuck).error.message.lower()
     assert jobs.read_job_record(done).stage == jobs.STAGE_READY
     assert jobs.read_job_record(draft) is None
 
@@ -125,3 +128,67 @@ def test_current_status_is_draft_when_no_job_yaml(tmp_path):
 def test_mark_queued_writes_queued_stage(tmp_path):
     jobs.mark_queued(tmp_path)
     assert jobs.current_status(tmp_path) == jobs.STAGE_QUEUED
+
+
+def test_classify_error_bad_zip_file(tmp_path):
+    garbage = tmp_path / "not-a-zip.zip"
+    garbage.write_bytes(b"this is not a zip file")
+
+    try:
+        zipfile.ZipFile(garbage)
+    except zipfile.BadZipFile as exc:
+        error = jobs._classify_error(exc, tmp_path)
+    else:
+        pytest.fail("expected zipfile.BadZipFile")
+    assert error.code == jobs.UploadErrorCode.BAD_ARCHIVE
+    assert error.candidates is None
+
+
+def test_classify_error_unsafe_archive_is_also_bad_archive(tmp_path):
+    exc = jobs.UnsafeArchiveError("Unsafe path in archive: '../evil.dxf'")
+    error = jobs._classify_error(exc, tmp_path)
+    assert error.code == jobs.UploadErrorCode.BAD_ARCHIVE
+
+
+def test_classify_error_no_dxf_files(tmp_path):
+    exc = NoDxfFilesError(f"No .dxf files found under {tmp_path}")
+    error = jobs._classify_error(exc, tmp_path)
+    assert error.code == jobs.UploadErrorCode.NO_DXF_FOUND
+    assert error.candidates is None
+
+
+def test_classify_error_ambiguous_root_relativizes_candidates_to_raw_dir(tmp_path):
+    raw_dir = tmp_path / "raw"
+    (raw_dir / "sub").mkdir(parents=True)
+    a = raw_dir / "sub" / "genplan.dxf"
+    b = raw_dir / "dendroplan.dxf"
+    a.touch()
+    b.touch()
+
+    exc = RootDetectionError("ambiguous", candidates=[a, b])
+    error = jobs._classify_error(exc, raw_dir)
+
+    assert error.code == jobs.UploadErrorCode.AMBIGUOUS_ROOT_DXF
+    assert set(error.candidates) == {"sub/genplan.dxf", "dendroplan.dxf"}
+
+
+def test_classify_error_ambiguous_root_falls_back_to_name_outside_raw_dir(tmp_path):
+    """Defensive fallback: a candidate path that (for whatever reason) isn't
+    actually under raw_dir should still report *something* usable rather
+    than raising -- its bare file name -- instead of crashing the job's own
+    error-reporting path.
+    """
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    elsewhere = tmp_path / "elsewhere" / "weird.dxf"
+
+    exc = RootDetectionError("ambiguous", candidates=[elsewhere])
+    error = jobs._classify_error(exc, raw_dir)
+
+    assert error.candidates == ["weird.dxf"]
+
+
+def test_classify_error_other_fallback(tmp_path):
+    error = jobs._classify_error(RuntimeError("something else entirely"), tmp_path)
+    assert error.code == jobs.UploadErrorCode.OTHER
+    assert "something else entirely" in error.message

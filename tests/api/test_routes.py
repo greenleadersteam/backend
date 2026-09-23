@@ -171,7 +171,61 @@ def test_upload_failure_marks_project_failed(client):
 
     data = _wait_for_terminal(client, pid)
     assert data["status"] == "failed"
-    assert "No .dxf files" in data["job"]["error"]
+    assert data["job"]["error"]["code"] == "no_dxf_found"
+    assert "No .dxf files" in data["job"]["error"]["message"]
+
+
+def test_upload_non_zip_body_reports_bad_archive(client):
+    pid = client.post("/projects", json={"name": "A"}).json()["id"]
+
+    r = client.post(f"/projects/{pid}/upload", content=b"this is not a zip file at all")
+    assert r.status_code == 202
+
+    data = _wait_for_terminal(client, pid)
+    assert data["status"] == "failed"
+    assert data["job"]["error"]["code"] == "bad_archive"
+
+
+def _ambiguous_root_zip_bytes(tmp_path) -> bytes:
+    """Two independent DXFs with real content and no xref link either way --
+    exercises detect_root's genuinely-ambiguous path end to end, and checks
+    that reported candidates are zip-root-relative, not server-absolute.
+    """
+    a_path = tmp_path / f"a-{uuid.uuid4().hex}.dxf"
+    b_path = tmp_path / f"b-{uuid.uuid4().hex}.dxf"
+    doc_a = ezdxf.new("R2010")
+    doc_a.modelspace().add_line((0, 0), (1, 1))
+    doc_a.saveas(a_path)
+    doc_b = ezdxf.new("R2010")
+    doc_b.modelspace().add_line((0, 0), (1, 1))
+    doc_b.saveas(b_path)
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w") as zf:
+        zf.write(a_path, "sub/genplan.dxf")
+        zf.write(b_path, "dendroplan.dxf")
+    return zip_buf.getvalue()
+
+
+def test_upload_ambiguous_root_reports_candidates_relative_to_zip_root(client, tmp_path):
+    pid = client.post("/projects", json={"name": "A"}).json()["id"]
+
+    r = client.post(f"/projects/{pid}/upload", content=_ambiguous_root_zip_bytes(tmp_path))
+    assert r.status_code == 202
+
+    data = _wait_for_terminal(client, pid)
+    assert data["status"] == "failed"
+    error = data["job"]["error"]
+    assert error["code"] == "ambiguous_root_dxf"
+    assert set(error["candidates"]) == {"sub/genplan.dxf", "dendroplan.dxf"}
+
+
+def test_upload_empty_body_returns_400_without_queuing_a_job(client):
+    pid = client.post("/projects", json={"name": "A"}).json()["id"]
+
+    r = client.post(f"/projects/{pid}/upload", content=b"")
+    assert r.status_code == 400
+
+    assert client.get(f"/projects/{pid}").json()["status"] == "draft"
 
 
 def test_reupload_allowed_after_a_failed_run(client):

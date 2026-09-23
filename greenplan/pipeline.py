@@ -6,13 +6,20 @@ canonical FeatureCollection together. Both the CLI and a future API call
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Iterator
 
-from greenplan.classify.base import Classifier
+from greenplan.classify.base import Classifier, ClassificationResult
 from greenplan.classify.rule_based import RuleBasedClassifier
 from greenplan.coverage import CoverageBuilder, CoverageReport
 from greenplan.explain.builder import build_explanations
-from greenplan.geometry import geometry_for_matched_entity, log, scale_geometry, unit_scale_to_meters
-from greenplan.io.dxf_source import collect_entities, detect_root, discover_dxf_files
+from greenplan.geometry import (
+    explode_insert,
+    geometry_for_matched_entity,
+    log,
+    scale_geometry,
+    unit_scale_to_meters,
+)
+from greenplan.io.dxf_source import NoDxfFilesError, collect_entities, detect_root, discover_dxf_files
 from greenplan.layout.engine import generate_layout
 from greenplan.layout.rules import PlantingRuleSet
 from greenplan.model import Feature, FeatureCollection, PlantingPoint, ZoningResult
@@ -37,6 +44,41 @@ def load_default_planting_rules() -> PlantingRuleSet:
     return PlantingRuleSet.load(DEFAULT_PLANTING_RULES_PATH)
 
 
+def _classify_recursive(
+    entity,
+    classifier: Classifier,
+    coverage_builder: CoverageBuilder,
+    source: str,
+) -> Iterator[tuple[object, ClassificationResult]]:
+    """Classify one entity; if it's an unmatched INSERT, recurse into its
+    exploded children instead of giving up on the whole subtree.
+
+    collect_entities() only ever resolves *unresolved* xrefs by name -- a
+    provider that binds an xref into the document instead of leaving it
+    external produces an ordinary, non-xref INSERT whose own layer/block name
+    is often a generic container (e.g. "сети") that matches no rule. Without
+    this recursion, that single unmatched INSERT silently hides an arbitrary
+    amount of real, classifiable geometry behind it (confirmed on a real
+    object: one such bound block held 114k child entities across 43 real
+    layers -- gas/water/heat networks, manholes, geodetic points -- none of
+    it ever reachable). Matched top-level entities (the common case) return
+    immediately without incurring any explosion cost.
+    """
+    result = classifier.classify(entity)
+    if result is not None:
+        yield entity, result
+        return
+    if entity.dxftype() != "INSERT":
+        coverage_builder.record_unmatched(entity.dxf.layer, entity.dxftype(), source)
+        return
+    children = list(explode_insert(entity))
+    if not children:
+        coverage_builder.record_unmatched(entity.dxf.layer, entity.dxftype(), source)
+        return
+    for child in children:
+        yield from _classify_recursive(child, classifier, coverage_builder, source)
+
+
 def parse_folder(
     folder: Path,
     root: Path | None = None,
@@ -49,7 +91,7 @@ def parse_folder(
 
     files = discover_dxf_files(folder)
     if not files:
-        raise SystemExit(f"No .dxf files found under {folder}")
+        raise NoDxfFilesError(f"No .dxf files found under {folder}")
     log(f"Discovered {len(files)} .dxf files under {folder}")
 
     root_file = root.resolve() if root else detect_root(files)
@@ -66,37 +108,33 @@ def parse_folder(
 
     features: list[Feature] = []
     for entity, source in entities:
-        result = classifier.classify(entity)
-        if result is None:
-            coverage_builder.record_unmatched(entity.dxf.layer, entity.dxftype(), source)
-            continue
+        for matched_entity, result in _classify_recursive(entity, classifier, coverage_builder, source):
+            geom = geometry_for_matched_entity(matched_entity, result.expand_blocks, result.rule_id)
+            if geom is None or geom.is_empty:
+                continue
+            geom = scale_geometry(geom, scale_factor)
 
-        geom = geometry_for_matched_entity(entity, result.expand_blocks, result.rule_id)
-        if geom is None or geom.is_empty:
-            continue
-        geom = scale_geometry(geom, scale_factor)
+            extra = {}
+            if result.category == "contours" and matched_entity.dxf.is_supported("elevation"):
+                elevation = matched_entity.dxf.get("elevation", None)
+                if elevation is not None:
+                    extra["elevation"] = elevation
 
-        extra = {}
-        if result.category == "contours" and entity.dxf.is_supported("elevation"):
-            elevation = entity.dxf.get("elevation", None)
-            if elevation is not None:
-                extra["elevation"] = elevation
-
-        coverage_builder.record_matched(result.rule_id)
-        features.append(
-            Feature(
-                geometry=geom,
-                category=result.category,
-                subtype=result.subtype,
-                rule_id=result.rule_id,
-                status=result.status,
-                layer=entity.dxf.layer,
-                dxftype=entity.dxftype(),
-                source_file=source,
-                handle=entity.dxf.handle,
-                extra=extra,
+            coverage_builder.record_matched(result.rule_id)
+            features.append(
+                Feature(
+                    geometry=geom,
+                    category=result.category,
+                    subtype=result.subtype,
+                    rule_id=result.rule_id,
+                    status=result.status,
+                    layer=matched_entity.dxf.layer,
+                    dxftype=matched_entity.dxftype(),
+                    source_file=source,
+                    handle=matched_entity.dxf.handle,
+                    extra=extra,
+                )
             )
-        )
 
     fc = FeatureCollection(
         root_file=str(root_file),

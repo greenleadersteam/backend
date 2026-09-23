@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from greenplan.api.jobs import JobRecord
+from greenplan.api.jobs import JobError, JobRecord
 
 
 class ProjectCreateRequest(BaseModel):
@@ -20,7 +20,7 @@ class ProjectUpdateRequest(BaseModel):
 class JobStatus(BaseModel):
     stage: str
     progress_pct: int
-    error: str | None = None
+    error: JobError | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
 
