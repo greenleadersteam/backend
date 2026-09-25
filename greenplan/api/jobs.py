@@ -19,6 +19,7 @@ needs to talk to the worker process directly.
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 import traceback
 import zipfile
@@ -214,6 +215,17 @@ def run_processing_job(project_dir: Path) -> None:
 
     try:
         set_stage(STAGE_EXTRACTING)
+        # A re-upload is allowed from 'draft'/'failed' (see UPLOADABLE_STATUSES),
+        # but zipfile.extractall() only ever adds/overwrites -- it never
+        # removes -- so without clearing these first, a file present in an
+        # earlier failed attempt but absent from the new zip would linger
+        # forever and keep influencing processing (e.g. a stale extra
+        # candidate that makes root detection see a file the new upload
+        # never even contained).
+        shutil.rmtree(raw_dir, ignore_errors=True)
+        shutil.rmtree(processed_dir, ignore_errors=True)
+        raw_dir.mkdir()
+        processed_dir.mkdir()
         _safe_extract_zip(project_dir / "upload.zip", raw_dir)
 
         set_stage(STAGE_PARSING)

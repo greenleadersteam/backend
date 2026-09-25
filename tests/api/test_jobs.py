@@ -1,3 +1,4 @@
+import io
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
@@ -86,6 +87,33 @@ def test_manager_does_not_overwrite_a_terminal_job_yaml_on_crash(tmp_path):
 
     time.sleep(0.1)  # let the done-callback run
     assert jobs.read_job_record(tmp_path).stage == jobs.STAGE_READY
+
+
+def test_reupload_clears_stale_files_from_previous_attempt(tmp_path):
+    """Regression test: re-upload is allowed from 'draft'/'failed', but a
+    naive zipfile.extractall() only ever adds/overwrites -- it never removes
+    -- so a file present in an earlier attempt but absent from the new zip
+    must not linger in raw/ (found live: it kept resurrecting an excluded
+    'ambiguous_root_dxf' candidate on retry, since the old copy was never
+    cleared out before the new zip was extracted on top of it).
+    """
+    (tmp_path / "raw").mkdir()
+    (tmp_path / "processed").mkdir()
+
+    def make_zip_bytes(names):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            for n in names:
+                zf.writestr(n, "placeholder")
+        return buf.getvalue()
+
+    (tmp_path / "upload.zip").write_bytes(make_zip_bytes(["a.dxf", "b.dxf"]))
+    jobs.run_processing_job(tmp_path)
+    assert {p.name for p in (tmp_path / "raw").iterdir()} == {"a.dxf", "b.dxf"}
+
+    (tmp_path / "upload.zip").write_bytes(make_zip_bytes(["a.dxf"]))
+    jobs.run_processing_job(tmp_path)
+    assert {p.name for p in (tmp_path / "raw").iterdir()} == {"a.dxf"}
 
 
 def test_run_processing_job_writes_failed_on_bad_upload(tmp_path):
