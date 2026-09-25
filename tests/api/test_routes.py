@@ -11,18 +11,58 @@ from fastapi.testclient import TestClient
 
 from greenplan.api.app import create_app
 from greenplan.api.config import Settings
+from greenplan.georeference import geobridge
+from greenplan.georeference.geobridge import GeobridgePoint
+
+# Covers the two synthetic geodetic-point labels _empty_dxf_zip_bytes() writes
+# (see GEODETIC_POINT_LABELS below) -- (minx, miny, maxx, maxy) WGS84 lon/lat.
+DEFAULT_BBOX = [37.0, 55.0, 38.0, 56.0]
+
+# Real coordinate lookup (geobridge.ru) is mocked for every test in this module
+# (see the autouse fixture below): none of these tests should ever hit the
+# real network, and two matched points is exactly the real-world floor (see
+# greenplan.georeference.transform's MIN_MATCHED_POINTS_DEFAULT) -- fewer
+# would make every "ready" test fail with insufficient_geodetic_points.
+GEODETIC_POINT_LABELS = ("111111", "222222")
+_FAKE_GEOBRIDGE_COORDS = {
+    "111111": (55.70, 37.60),
+    "222222": (55.71, 37.62),
+}
+
+
+def _fake_fetch_points(label, *, client=None, timeout=10.0, base_url=None):
+    coords = _FAKE_GEOBRIDGE_COORDS.get(label)
+    if coords is None:
+        return []
+    lat, lng = coords
+    return [GeobridgePoint(title=label, lat=lat, lng=lng, region="50 - Московская область")]
+
+
+@pytest.fixture(autouse=True)
+def _mock_geobridge(monkeypatch):
+    monkeypatch.setattr(geobridge, "fetch_points", _fake_fetch_points)
 
 
 def _empty_dxf_zip_bytes(tmp_path) -> bytes:
-    """A minimal but genuine DXF (no matching layers, no entities) zipped
-    up: runs through the real parse_folder -> plant_folder -> dxf_sink
-    pipeline end to end without needing any real pilot-object data.
+    """A minimal but genuine DXF (no matching layers/entities beyond two
+    synthetic geodetic benchmark points) zipped up: runs through the real
+    parse_folder -> georeference -> plant_folder -> dxf_sink pipeline end to
+    end without needing any real pilot-object data. The two labeled points
+    are the real-world floor for a matched georeference (see
+    greenplan.georeference.transform) -- without them, every test relying on
+    this fixture reaching 'ready' would instead fail with
+    insufficient_geodetic_points now that georeferencing always runs
+    whenever a project has a bbox_user on record.
 
     ezdxf only writes its (text) DXF format to a real file/text stream, not
     an in-memory bytes buffer, hence the throwaway file under tmp_path.
     """
     dxf_path = tmp_path / f"root-{uuid.uuid4().hex}.dxf"
-    ezdxf.new("R2010").saveas(dxf_path)
+    doc = ezdxf.new("R2010")
+    msp = doc.modelspace()
+    for i, label in enumerate(GEODETIC_POINT_LABELS):
+        msp.add_text(label, dxfattribs={"layer": "Геодезические пункты", "insert": (i * 100.0, 0.0)})
+    doc.saveas(dxf_path)
     zip_buf = io.BytesIO()
     with zipfile.ZipFile(zip_buf, "w") as zf:
         zf.write(dxf_path, "root.dxf")
@@ -61,6 +101,15 @@ def _wait_for_terminal(client, project_id, timeout=10.0):
     pytest.fail(f"job did not reach a terminal state in time, last seen: {data}")
 
 
+def _create_project(client, name="A", description=None, bbox_user=DEFAULT_BBOX):
+    payload = {"name": name}
+    if description is not None:
+        payload["description"] = description
+    if bbox_user is not None:
+        payload["bbox_user"] = bbox_user
+    return client.post("/projects", json=payload)
+
+
 @pytest.fixture
 def client(tmp_path):
     with TestClient(_make_app(tmp_path)) as c:
@@ -68,7 +117,7 @@ def client(tmp_path):
 
 
 def test_create_project_starts_as_draft(client):
-    r = client.post("/projects", json={"name": "A", "description": "d"})
+    r = _create_project(client, description="d")
     assert r.status_code == 201
     body = r.json()
     assert body["status"] == "draft"
@@ -77,9 +126,14 @@ def test_create_project_starts_as_draft(client):
     assert body["job"]["stage"] == "draft"
 
 
+def test_create_project_requires_bbox_user(client):
+    r = client.post("/projects", json={"name": "A"})
+    assert r.status_code == 422
+
+
 def test_list_projects_excludes_deleted(client):
-    a = client.post("/projects", json={"name": "A"}).json()["id"]
-    client.post("/projects", json={"name": "B"})
+    a = _create_project(client, name="A").json()["id"]
+    _create_project(client, name="B")
     client.delete(f"/projects/{a}")
 
     names = {p["name"] for p in client.get("/projects").json()}
@@ -91,7 +145,7 @@ def test_get_missing_project_404(client):
 
 
 def test_update_metadata_only(client):
-    pid = client.post("/projects", json={"name": "A", "description": "d"}).json()["id"]
+    pid = _create_project(client, description="d").json()["id"]
 
     r = client.patch(f"/projects/{pid}", json={"description": "new desc"})
 
@@ -106,7 +160,7 @@ def test_update_missing_project_404(client):
 
 
 def test_soft_delete_then_404_everywhere(client):
-    pid = client.post("/projects", json={"name": "A"}).json()["id"]
+    pid = _create_project(client).json()["id"]
 
     assert client.delete(f"/projects/{pid}").status_code == 204
     assert client.get(f"/projects/{pid}").status_code == 404
@@ -115,7 +169,7 @@ def test_soft_delete_then_404_everywhere(client):
 
 
 def test_data_endpoints_404_before_ready(client):
-    pid = client.post("/projects", json={"name": "A"}).json()["id"]
+    pid = _create_project(client).json()["id"]
     for path in ("zones", "planting", "explanation", "dxf"):
         assert client.get(f"/projects/{pid}/{path}").status_code == 404
 
@@ -126,7 +180,7 @@ def test_upload_to_missing_project_404(client):
 
 def test_upload_too_large_rejected(tmp_path):
     with TestClient(_make_app(tmp_path, max_upload_mb=1)) as client:
-        pid = client.post("/projects", json={"name": "A"}).json()["id"]
+        pid = _create_project(client).json()["id"]
         oversized = b"0" * (2 * 1024 * 1024)
 
         r = client.post(f"/projects/{pid}/upload", content=oversized)
@@ -137,20 +191,25 @@ def test_upload_too_large_rejected(tmp_path):
 
 
 def test_full_upload_success_flow(client, tmp_path):
-    pid = client.post("/projects", json={"name": "A"}).json()["id"]
+    pid = _create_project(client).json()["id"]
 
     r = client.post(f"/projects/{pid}/upload", content=_empty_dxf_zip_bytes(tmp_path))
     assert r.status_code == 202
-    assert r.json()["status"] in ("queued", "extracting", "parsing", "zoning_layout", "exporting", "ready")
+    assert r.json()["status"] in (
+        "queued", "extracting", "parsing", "georeferencing", "zoning_layout", "exporting", "ready",
+    )
 
     data = _wait_for_terminal(client, pid)
     assert data["status"] == "ready"
     assert data["job"]["progress_pct"] == 100
     assert data["job"]["error"] is None
+    assert data["job"]["georeference"]["confidence"] == "unvalidated"  # exactly 2 matched points
+    assert set(data["job"]["georeference"]["matched_labels"]) == set(GEODETIC_POINT_LABELS)
 
     zones = client.get(f"/projects/{pid}/zones")
     assert zones.status_code == 200
     assert zones.json()["type"] == "FeatureCollection"
+    assert zones.json()["metadata"]["crs"] == "EPSG:4326 (WGS84 lon/lat)"
 
     planting = client.get(f"/projects/{pid}/planting")
     assert planting.status_code == 200
@@ -164,7 +223,7 @@ def test_full_upload_success_flow(client, tmp_path):
 
 
 def test_upload_failure_marks_project_failed(client):
-    pid = client.post("/projects", json={"name": "A"}).json()["id"]
+    pid = _create_project(client).json()["id"]
 
     r = client.post(f"/projects/{pid}/upload", content=_no_dxf_zip_bytes())
     assert r.status_code == 202
@@ -176,7 +235,7 @@ def test_upload_failure_marks_project_failed(client):
 
 
 def test_upload_non_zip_body_reports_bad_archive(client):
-    pid = client.post("/projects", json={"name": "A"}).json()["id"]
+    pid = _create_project(client).json()["id"]
 
     r = client.post(f"/projects/{pid}/upload", content=b"this is not a zip file at all")
     assert r.status_code == 202
@@ -207,7 +266,7 @@ def _ambiguous_root_zip_bytes(tmp_path) -> bytes:
 
 
 def test_upload_ambiguous_root_reports_candidates_relative_to_zip_root(client, tmp_path):
-    pid = client.post("/projects", json={"name": "A"}).json()["id"]
+    pid = _create_project(client).json()["id"]
 
     r = client.post(f"/projects/{pid}/upload", content=_ambiguous_root_zip_bytes(tmp_path))
     assert r.status_code == 202
@@ -220,7 +279,7 @@ def test_upload_ambiguous_root_reports_candidates_relative_to_zip_root(client, t
 
 
 def test_upload_empty_body_returns_400_without_queuing_a_job(client):
-    pid = client.post("/projects", json={"name": "A"}).json()["id"]
+    pid = _create_project(client).json()["id"]
 
     r = client.post(f"/projects/{pid}/upload", content=b"")
     assert r.status_code == 400
@@ -229,7 +288,7 @@ def test_upload_empty_body_returns_400_without_queuing_a_job(client):
 
 
 def test_reupload_allowed_after_a_failed_run(client):
-    pid = client.post("/projects", json={"name": "A"}).json()["id"]
+    pid = _create_project(client).json()["id"]
     client.post(f"/projects/{pid}/upload", content=_no_dxf_zip_bytes())
     _wait_for_terminal(client, pid)
 
@@ -239,14 +298,15 @@ def test_reupload_allowed_after_a_failed_run(client):
 
 
 def test_upload_rejected_while_processing_and_after_ready(client, tmp_path):
-    pid = client.post("/projects", json={"name": "A"}).json()["id"]
+    pid = _create_project(client).json()["id"]
     zip_bytes = _empty_dxf_zip_bytes(tmp_path)
     client.post(f"/projects/{pid}/upload", content=zip_bytes)
 
     conflict = client.post(f"/projects/{pid}/upload", content=zip_bytes)
     assert conflict.status_code == 409
 
-    _wait_for_terminal(client, pid)
+    data = _wait_for_terminal(client, pid)
+    assert data["status"] == "ready"
 
     conflict_after_ready = client.post(f"/projects/{pid}/upload", content=zip_bytes)
     assert conflict_after_ready.status_code == 409
@@ -259,8 +319,8 @@ def test_concurrency_limit_returns_429_until_a_slot_frees(tmp_path):
         release.wait(timeout=5)
 
     with TestClient(_make_app(tmp_path, max_concurrent_jobs=1, job_fn=blocking_job)) as client:
-        first = client.post("/projects", json={"name": "A"}).json()["id"]
-        second = client.post("/projects", json={"name": "B"}).json()["id"]
+        first = _create_project(client, name="A").json()["id"]
+        second = _create_project(client, name="B").json()["id"]
 
         r1 = client.post(f"/projects/{first}/upload", content=_no_dxf_zip_bytes())
         assert r1.status_code == 202

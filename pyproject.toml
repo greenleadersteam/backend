@@ -18,6 +18,8 @@ dependencies = [
     "fastapi (>=0.141.1,<0.142.0)",
     "uvicorn[standard] (>=0.53.0,<0.54.0)",
     "pydantic-settings (>=2.15.0,<3.0.0)",
+    "pyproj (>=3.8.0,<4.0.0)",
+    "httpx (>=0.28.1,<0.29.0)",
 ]
 
 [project.scripts]
@@ -25,7 +27,6 @@ greenplan = "greenplan.cli:app"
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=8.0.0,<9.0.0"
-httpx = "^0.28.1"
 httpie = "^3.2.4"
 
 [tool.poetry]

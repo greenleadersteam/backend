@@ -116,6 +116,13 @@ def entity_to_geometry(entity):
         if t == "POINT":
             p = entity.dxf.location
             return Point(p.x, p.y)
+        if t in ("TEXT", "MTEXT"):
+            # Both expose .dxf.insert (their anchor position) and
+            # .plain_text() uniformly -- the text content itself is read
+            # separately, by whoever needs it (see pipeline.py's geodetic
+            # benchmark label extraction), not here.
+            p = entity.dxf.insert
+            return Point(p.x, p.y)
         if t == "LINE":
             s, e = entity.dxf.start, entity.dxf.end
             return LineString([(s.x, s.y), (e.x, e.y)])

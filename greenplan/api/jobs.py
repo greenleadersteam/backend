@@ -32,12 +32,15 @@ from typing import Callable
 from pydantic import BaseModel, field_validator
 
 from greenplan.api._yamlio import atomic_write_yaml, read_yaml
+from greenplan.api.config import Settings
+from greenplan.api.storage import METADATA_FILENAME, ProjectRecord
 
 JOB_FILENAME = "job.yaml"
 
 STAGE_QUEUED = "queued"
 STAGE_EXTRACTING = "extracting"
 STAGE_PARSING = "parsing"
+STAGE_GEOREFERENCING = "georeferencing"
 STAGE_ZONING_LAYOUT = "zoning_layout"
 STAGE_EXPORTING = "exporting"
 STAGE_READY = "ready"
@@ -52,6 +55,7 @@ _STAGE_PROGRESS = {
     STAGE_QUEUED: 0,
     STAGE_EXTRACTING: 5,
     STAGE_PARSING: 10,
+    STAGE_GEOREFERENCING: 40,  # external, potentially slow -- surfaced as its own stage
     STAGE_ZONING_LAYOUT: 70,
     STAGE_EXPORTING: 90,
     STAGE_READY: 100,
@@ -63,6 +67,8 @@ class UploadErrorCode(str, Enum):
     BAD_ARCHIVE = "bad_archive"  # not a zip, or corrupted
     NO_DXF_FOUND = "no_dxf_found"  # extracted fine, but zero .dxf files inside
     AMBIGUOUS_ROOT_DXF = "ambiguous_root_dxf"  # more than one plausible root drawing
+    INSUFFICIENT_GEODETIC_POINTS = "insufficient_geodetic_points"  # too few/unreliable geobridge matches
+    GEOREFERENCE_SERVICE_ERROR = "georeference_service_error"  # geobridge.ru request failed
     OTHER = "other"
 
 
@@ -72,6 +78,12 @@ class JobError(BaseModel):
     # Only populated for AMBIGUOUS_ROOT_DXF: candidate root files, as paths
     # relative to the zip root (never the server's absolute filesystem path).
     candidates: list[str] | None = None
+
+
+class GeoreferenceInfo(BaseModel):
+    confidence: str  # "validated" | "unvalidated"
+    matched_labels: list[str]
+    residuals_m: dict[str, float]
 
 
 class UnsafeArchiveError(ValueError):
@@ -85,6 +97,7 @@ class JobRecord(BaseModel):
     stage: str
     progress_pct: int
     error: JobError | None = None
+    georeference: GeoreferenceInfo | None = None
     started_at: datetime
     finished_at: datetime | None = None
 
@@ -132,11 +145,19 @@ def mark_queued(project_dir: Path) -> None:
     _write_stage(project_dir, stage=STAGE_QUEUED, started_at=_now())
 
 
-def _write_stage(project_dir: Path, *, stage: str, started_at: datetime, error: JobError | None = None) -> None:
+def _write_stage(
+    project_dir: Path,
+    *,
+    stage: str,
+    started_at: datetime,
+    error: JobError | None = None,
+    georeference: GeoreferenceInfo | None = None,
+) -> None:
     record = JobRecord(
         stage=stage,
         progress_pct=_STAGE_PROGRESS[stage],
         error=error,
+        georeference=georeference,
         started_at=started_at,
         finished_at=_now() if stage in TERMINAL_STAGES else None,
     )
@@ -167,6 +188,9 @@ def _classify_error(exc: BaseException, raw_dir: Path) -> JobError:
     function, so deferring the import keeps ezdxf out of the lightweight API
     process that imports this module on every status-check request.
     """
+    import httpx
+
+    from greenplan.georeference.transform import InsufficientMatchedPointsError, ResidualTooHighError
     from greenplan.io.dxf_source import NoDxfFilesError, RootDetectionError
 
     if isinstance(exc, (zipfile.BadZipFile, UnsafeArchiveError)):
@@ -186,25 +210,61 @@ def _classify_error(exc: BaseException, raw_dir: Path) -> JobError:
             message=str(exc),
             candidates=candidates,
         )
+    if isinstance(exc, (InsufficientMatchedPointsError, ResidualTooHighError)):
+        return JobError(code=UploadErrorCode.INSUFFICIENT_GEODETIC_POINTS, message=str(exc))
+    if isinstance(exc, httpx.HTTPError):
+        return JobError(code=UploadErrorCode.GEOREFERENCE_SERVICE_ERROR, message=str(exc))
     return JobError(code=UploadErrorCode.OTHER, message=f"{type(exc).__name__}: {exc}")
 
 
+def _read_bbox_user(project_dir: Path) -> tuple[float, float, float, float] | None:
+    """None means "no bbox on record" -- either a project folder written
+    before bbox_user existed, or (defensively) one with no metadata.yaml at
+    all (some jobs.py unit tests exercise run_processing_job directly against
+    a bare project_dir, never having gone through ProjectStore.create()).
+    Either way, the caller treats this as "skip georeferencing", not a hard
+    error: the real, enforced mandatory-ness is at the API request-schema
+    level (ProjectCreateRequest.bbox_user has no default).
+    """
+    metadata_path = project_dir / METADATA_FILENAME
+    if not metadata_path.is_file():
+        return None
+    return ProjectRecord.model_validate(read_yaml(metadata_path)).bbox_user
+
+
 def run_processing_job(project_dir: Path) -> None:
-    """The actual pipeline run: extract -> parse_folder -> plant_folder ->
-    export DXF/GeoJSON/explanation. Writes job.yaml after every stage so a
-    status poll always reflects real progress, and writes a failed job.yaml
-    (rather than letting the exception vanish into the executor) on error.
+    """The actual pipeline run: extract -> parse_folder -> georeference
+    (if bbox_user is on record) -> plant_folder -> export DXF/GeoJSON/
+    explanation. Writes job.yaml after every stage so a status poll always
+    reflects real progress, and writes a failed job.yaml (rather than
+    letting the exception vanish into the executor) on error.
     """
     # Imports deferred to inside the function: this module gets imported by
     # the lightweight API process on every request (for read_job_record /
     # current_status), and greenplan.pipeline pulls in the full geo stack
     # (shapely, ezdxf, geopandas) -- no reason to pay that import cost
     # outside the worker process that actually needs it.
-    from greenplan.export.geojson import feature_collection_to_geojson
+    import httpx
+
+    from greenplan.explain.builder import build_explanations
+    from greenplan.export.geojson import NO_CRS_LABEL, feature_collection_to_geojson
     from greenplan.export.planting import planting_points_to_geojson
     from greenplan.export.zones import zoning_result_to_geojson
+    from greenplan.georeference.apply import (
+        WGS84_CRS_LABEL,
+        euclidean_transform_fn,
+        reproject_fn,
+        transform_feature_collection,
+        transform_planting_points,
+        transform_zoning_result,
+    )
     from greenplan.io.dxf_sink import append_planting_layer
-    from greenplan.pipeline import parse_folder, plant_folder
+    from greenplan.pipeline import (
+        georeference_feature_collection,
+        load_default_planting_rules,
+        parse_folder,
+        plant_folder,
+    )
 
     started_at = _now()
     raw_dir = project_dir / "raw"
@@ -230,26 +290,69 @@ def run_processing_job(project_dir: Path) -> None:
 
         set_stage(STAGE_PARSING)
         fc, _coverage = parse_folder(raw_dir)
+
+        bbox_user = _read_bbox_user(project_dir)
+        geo_result = None
+        if bbox_user is not None:
+            set_stage(STAGE_GEOREFERENCING)
+            settings = Settings()
+            with httpx.Client() as client:
+                fc, geo_result = georeference_feature_collection(
+                    fc, bbox_user, client=client,
+                    timeout=settings.geobridge_timeout_s,
+                    base_url=settings.geobridge_base_url,
+                    utm_crs=settings.georeference_utm_epsg,
+                    min_matched_points=settings.georeference_min_points,
+                    residual_threshold_m=settings.georeference_residual_threshold_m,
+                )
+
+        if geo_result is not None:
+            crs_label = WGS84_CRS_LABEL
+            to_wgs84 = reproject_fn(geo_result.utm_crs)
+            parsed_export_fc = transform_feature_collection(fc, to_wgs84)
+        else:
+            crs_label = NO_CRS_LABEL
+            parsed_export_fc = fc
         (processed_dir / "parsed.geojson").write_text(
-            json.dumps(feature_collection_to_geojson(fc), ensure_ascii=False), encoding="utf-8"
+            json.dumps(feature_collection_to_geojson(parsed_export_fc, crs=crs_label), ensure_ascii=False),
+            encoding="utf-8",
         )
 
         set_stage(STAGE_ZONING_LAYOUT)
-        zoning, points, explanations = plant_folder(fc)
+        planting_rules = load_default_planting_rules()
+        zoning, points, explanations = plant_folder(fc, planting_rules=planting_rules)
 
         set_stage(STAGE_EXPORTING)
+        if geo_result is not None:
+            zoning_out = transform_zoning_result(zoning, to_wgs84)
+            points_out = transform_planting_points(points, to_wgs84)
+            points_local = transform_planting_points(points, euclidean_transform_fn(geo_result.utm_to_local))
+            explanations_out = build_explanations(points_local, planting_rules)
+            dxf_points = points_local
+        else:
+            zoning_out, points_out, explanations_out, dxf_points = zoning, points, explanations, points
+
         (processed_dir / "zones.geojson").write_text(
-            json.dumps(zoning_result_to_geojson(zoning), ensure_ascii=False), encoding="utf-8"
+            json.dumps(zoning_result_to_geojson(zoning_out, crs=crs_label), ensure_ascii=False), encoding="utf-8"
         )
         (processed_dir / "planting.geojson").write_text(
-            json.dumps(planting_points_to_geojson(points), ensure_ascii=False), encoding="utf-8"
+            json.dumps(planting_points_to_geojson(points_out, crs=crs_label), ensure_ascii=False), encoding="utf-8"
         )
         (processed_dir / "explanation.json").write_text(
-            json.dumps(explanations, ensure_ascii=False), encoding="utf-8"
+            json.dumps(explanations_out, ensure_ascii=False), encoding="utf-8"
         )
-        append_planting_layer(Path(fc.root_file), points, processed_dir / "planting.dxf")
+        append_planting_layer(Path(fc.root_file), dxf_points, processed_dir / "planting.dxf")
 
-        _write_stage(project_dir, stage=STAGE_READY, started_at=started_at)
+        georeference_info = (
+            GeoreferenceInfo(
+                confidence=geo_result.confidence,
+                matched_labels=geo_result.matched_labels,
+                residuals_m=geo_result.residuals_m,
+            )
+            if geo_result is not None
+            else None
+        )
+        _write_stage(project_dir, stage=STAGE_READY, started_at=started_at, georeference=georeference_info)
     except BaseException as exc:
         # BaseException, not Exception: parse_folder/plant_folder use
         # SystemExit as their "fatal, user-facing input error" convention

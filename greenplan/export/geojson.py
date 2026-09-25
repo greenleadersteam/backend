@@ -15,8 +15,10 @@ _KNOWN_PROPERTY_KEYS = {
     "rule_id", "category", "subtype", "status", "layer", "dxftype", "source_file", "handle",
 }
 
+NO_CRS_LABEL = "local drawing coordinates, no geo-reference available"
 
-def feature_collection_to_geojson(fc: FeatureCollection) -> dict:
+
+def feature_collection_to_geojson(fc: FeatureCollection, crs: str = NO_CRS_LABEL) -> dict:
     return {
         "type": "FeatureCollection",
         "metadata": {
@@ -24,7 +26,7 @@ def feature_collection_to_geojson(fc: FeatureCollection) -> dict:
             "source_folder": fc.source_folder,
             "source_insunits": fc.insunits_code,
             "scale_to_meters": fc.scale_to_meters,
-            "crs": "local drawing coordinates, no geo-reference available",
+            "crs": crs,
         },
         "features": [
             {

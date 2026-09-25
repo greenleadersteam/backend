@@ -17,6 +17,7 @@ from shapely.geometry import mapping
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
+from greenplan.export.geojson import NO_CRS_LABEL
 from greenplan.model import ZoningResult
 
 
@@ -36,7 +37,7 @@ def _polygonal_only(geom: BaseGeometry) -> BaseGeometry | None:
     return None
 
 
-def zoning_result_to_geojson(zoning: ZoningResult) -> dict:
+def zoning_result_to_geojson(zoning: ZoningResult, crs: str = NO_CRS_LABEL) -> dict:
     features = []
 
     for zone_type, geom in (
@@ -99,7 +100,7 @@ def zoning_result_to_geojson(zoning: ZoningResult) -> dict:
             "uncovered_categories": [
                 {"category": c, "subtype": s} for c, s in zoning.uncovered_categories
             ],
-            "crs": "local drawing coordinates, no geo-reference available",
+            "crs": crs,
         },
         "features": features,
     }

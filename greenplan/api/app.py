@@ -63,7 +63,7 @@ def list_projects(request: Request) -> list[ProjectResponse]:
 @router.post("", response_model=ProjectResponse, status_code=201)
 def create_project(body: ProjectCreateRequest, request: Request) -> ProjectResponse:
     store: ProjectStore = request.app.state.store
-    record = store.create(body.name, body.description)
+    record = store.create(body.name, body.description, body.bbox_user)
     return _to_response(store, record)
 
 

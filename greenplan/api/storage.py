@@ -35,6 +35,11 @@ class ProjectRecord(BaseModel):
     id: str
     name: str
     description: str | None = None
+    # (minx, miny, maxx, maxy), WGS84 lon/lat -- required at the API request
+    # schema level (ProjectCreateRequest), but stays optional here so that
+    # project folders written before this field existed don't fail
+    # validation on startup (ProjectStore.load() reads every metadata.yaml).
+    bbox_user: tuple[float, float, float, float] | None = None
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None = None
@@ -91,11 +96,17 @@ class ProjectStore:
             return None
         return record
 
-    def create(self, name: str, description: str | None) -> ProjectRecord:
+    def create(
+        self,
+        name: str,
+        description: str | None,
+        bbox_user: tuple[float, float, float, float] | None = None,
+    ) -> ProjectRecord:
         project_id = uuid.uuid4().hex
         now = _now()
         record = ProjectRecord(
-            id=project_id, name=name, description=description, created_at=now, updated_at=now
+            id=project_id, name=name, description=description, bbox_user=bbox_user,
+            created_at=now, updated_at=now,
         )
         project_dir = self.project_dir(project_id)
         project_dir.mkdir(parents=True)

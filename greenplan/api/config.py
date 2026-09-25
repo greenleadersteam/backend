@@ -25,6 +25,16 @@ class Settings(BaseSettings):
         "http://localhost:8080,http://127.0.0.1:8080"
     )
 
+    # Point-based DXF georeferencing (greenplan.georeference) -- mandatory for
+    # every API-created project, see api/jobs.py's STAGE_GEOREFERENCING.
+    geobridge_base_url: str = "https://geobridge.ru/maps/pp/api"
+    geobridge_timeout_s: float = Field(default=10.0, gt=0)
+    georeference_min_points: int = Field(default=2, ge=2)
+    georeference_residual_threshold_m: float = Field(default=1.0, gt=0)
+    # UTM zone 37N -- covers Moscow, the only pilot-object scope today; not
+    # auto-selected per project, see CLAUDE.md.
+    georeference_utm_epsg: str = "EPSG:32637"
+
     @property
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024

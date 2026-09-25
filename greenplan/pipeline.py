@@ -19,6 +19,8 @@ from greenplan.geometry import (
     scale_geometry,
     unit_scale_to_meters,
 )
+from greenplan.georeference.apply import euclidean_transform_fn, transform_feature_collection
+from greenplan.georeference.transform import GeoreferenceResult, georeference
 from greenplan.io.dxf_source import NoDxfFilesError, collect_entities, detect_root, discover_dxf_files
 from greenplan.layout.engine import generate_layout
 from greenplan.layout.rules import PlantingRuleSet
@@ -119,6 +121,10 @@ def parse_folder(
                 elevation = matched_entity.dxf.get("elevation", None)
                 if elevation is not None:
                     extra["elevation"] = elevation
+            if result.category == "geodetic_points" and matched_entity.dxftype() in ("TEXT", "MTEXT"):
+                label = matched_entity.plain_text().strip()
+                if label:
+                    extra["label"] = label
 
             coverage_builder.record_matched(result.rule_id)
             features.append(
@@ -144,6 +150,28 @@ def parse_folder(
         features=features,
     )
     return fc, coverage_builder.build()
+
+
+def georeference_feature_collection(
+    fc: FeatureCollection,
+    bbox: tuple[float, float, float, float],
+    *,
+    client,
+    **georeference_kwargs,
+) -> tuple[FeatureCollection, GeoreferenceResult]:
+    """Fit a local<->UTM rigid transform from fc's geodetic benchmark points
+    (see greenplan.georeference) and return an all-features-transformed copy
+    of fc in UTM meters, ready to feed into plant_folder(), alongside the fit
+    itself (kept around for its inverse transform, used to bring the
+    resulting PlantingPoints back to the local frame for DXF export).
+
+    `client` is an httpx.Client, injected so callers control its lifetime;
+    `georeference_kwargs` are forwarded to georeference() (timeout, base_url,
+    utm_crs, min_matched_points, residual_threshold_m).
+    """
+    geo_result = georeference(fc, bbox, client=client, **georeference_kwargs)
+    fc_utm = transform_feature_collection(fc, euclidean_transform_fn(geo_result.local_to_utm))
+    return fc_utm, geo_result
 
 
 def plant_folder(
