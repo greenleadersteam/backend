@@ -1,10 +1,10 @@
 name: Deploy backend
 
-# Push-triggered, builds on the VM itself (docker-compose.yml's `build: .`),
-# not in CI -- no container registry needed. This keeps the same
-# `docker compose up -d --build` flow documented in DEPLOY.md §6 for manual
-# deploys; this workflow just runs that command over SSH instead of you
-# running it by hand. See DEPLOY.md's "Continuous deployment" section for
+# Push-triggered, builds on the VM itself (../ci/docker-compose.yml's
+# `build: ../backend`), not in CI -- no container registry needed. This
+# keeps the same `docker compose up -d --build` flow documented in
+# ../ci/DEPLOY.md for manual deploys; this workflow just runs that command
+# over SSH instead of you running it by hand. See ../ci/DEPLOY.md for
 # one-time VM/secrets setup.
 on:
   push:
@@ -29,6 +29,7 @@ jobs:
             cd /opt/greenplan/backend
             git fetch origin main
             git reset --hard origin/main
+            cd /opt/greenplan/ci
             docker compose up -d --build backend
             docker image prune -f
           '
