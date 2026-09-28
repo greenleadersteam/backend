@@ -33,8 +33,10 @@ from greenplan.pipeline import (
     plant_folder,
 )
 from greenplan.rules.schema import RulePack
+from greenplan.cli_overture import overture_app
 
 app = typer.Typer(help="greenplan: DXF master-plan parsing and greening-layout generation.")
+app.add_typer(overture_app, name="overture")
 
 BBOX_HELP = (
     "Approximate project bbox 'minx,miny,maxx,maxy' (WGS84 lon/lat). When given, "
