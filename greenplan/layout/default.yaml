@@ -27,7 +27,8 @@
   placement: row_along_curb
   name_ru: "Живая изгородь вдоль борта"
   spacing_m: 1.5
-  offset_m: 0.8
+  # must exceed road_edge's shrub setback (1.0m), or the whole row is prohibited
+  offset_m: 1.2
 
 - id: SHRUB_FILL_LAWN
   plant_type: shrub

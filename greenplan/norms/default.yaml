@@ -1,75 +1,231 @@
-# 743-ПП setback distances (meters), ported from the prior agent's prototype
-# (Олимпийская деревня/Результат_агента/код_и_контекст/full4_run.py's
-# NORMS/CURB_NORM/EXIST_TREE_SPACING + full7_assemble.py's REFS), sourced from
-# "Правила размещения растений в городской среде.xlsx".
+# Setback distances (meters, from the obstacle to the plant's axis), per the
+# project's rule table (Google Sheet "Правила размещения растений в городской
+# среде", verified 2026-09-28) cross-checked against the local ../НПА/ copies:
+#   - 743-ПП, табл. 3.6.1 (reproduces МГСН 1.01-99) -- buildings, schools,
+#     tram, footpath/carriageway edges, masts, slopes, retaining walls, utilities
+#   - СП 42.13330.2016, табл. 9.1 -- same rows; adds "край трамвайного полотна"
+#   - МГСН 1.02-02, табл. 9.1 -- tree distance by street category
+#   - ПП РФ от 24.02.2009 № 160 / ПУЭ -- overhead power lines (these rows come
+#     from the rule table only; the acts themselves are not in ../НПА/)
 #
-# No article/clause numbers are available in the source data -- citations are
-# act name + free-text table row, exactly as the prototype recorded them.
+# Conventions:
+#   - Ranges (e.g. "5-7") use the UPPER bound.
+#   - "-" (no shrub distance in the source) reuses the tree distance
+#     (conservative), unless another row sets a shrub distance for the same
+#     boundary -- the street-category rows fall back to the generic
+#     carriageway-edge shrub value (1.0).
+#   - Categories/subtypes the parser doesn't emit yet (e.g. school buildings,
+#     street categories, power-line voltages) are inert until a data source
+#     (plan rules or Overture fusion) produces them.
 #
-# Known data-quality caveats (kept from the prototype rather than silently
-# "fixed", since they're the best evidence currently available):
-#   - existing_tree tree_m (5.0) was recovered from a corrupted Excel cell:
-#     the original range was "5-6" m, misread by Excel as a date; the lower
-#     (more conservative) bound was kept.
-#   - gas/sewer/drainage/water/other_utility shrub_m values have no separate
-#     source number and conservatively reuse the tree_m value.
+# existing_tree is not from table 3.6.1: it's the single-row spacing along
+# roads, 743-ПП табл. 3.6.2 ("5-6"). The shrub value (1.5) has no source row;
+# kept from the prototype.
+
+# --- Здания ---------------------------------------------------------------
+
+- obstacle_category: buildings
+  obstacle_subtype: null
+  tree_m: 5.0
+  shrub_m: 1.5
+  citation: "743-ПП, табл. 3.6.1 (МГСН 1.01-99) — наружная стена здания и сооружения"
+
+- obstacle_category: buildings
+  obstacle_subtype: school_kindergarten
+  tree_m: 10.0
+  shrub_m: 1.5
+  citation: "743-ПП, табл. 3.6.1 (МГСН 1.01-99) — наружная стена школьного здания или здания детского сада"
+
+# --- Улично-дорожная сеть -------------------------------------------------
+# road_edge = бортовой камень, treated as the carriageway edge ("проезжей
+# частью считается борт"). Subtypes = street category, when known.
+
+- obstacle_category: road_edge
+  obstacle_subtype: null
+  tree_m: 2.0
+  shrub_m: 1.0
+  citation: "743-ПП, табл. 3.6.1; СП 42.13330.2016, табл. 9.1 — край проезжей части улиц (бортовой камень)"
+
+- obstacle_category: road_edge
+  obstacle_subtype: arterial_citywide
+  tree_m: 7.0
+  shrub_m: 1.0
+  citation: "МГСН 1.02-02, табл. 9.1 — магистральные улицы общегородского значения (5-7 м, принята верхняя граница); кустарник — 743-ПП, табл. 3.6.1, край проезжей части"
+
+- obstacle_category: road_edge
+  obstacle_subtype: arterial_district
+  tree_m: 4.0
+  shrub_m: 1.0
+  citation: "МГСН 1.02-02, табл. 9.1 — магистральные улицы районного значения (3-4 м, принята верхняя граница); кустарник — 743-ПП, табл. 3.6.1, край проезжей части"
+
+- obstacle_category: road_edge
+  obstacle_subtype: local
+  tree_m: 3.0
+  shrub_m: 1.0
+  citation: "МГСН 1.02-02, табл. 9.1 — улицы и дороги местного значения (2-3 м, принята верхняя граница); кустарник — 743-ПП, табл. 3.6.1, край проезжей части"
+
+- obstacle_category: road_edge
+  obstacle_subtype: driveway
+  tree_m: 2.0
+  shrub_m: 1.0
+  citation: "МГСН 1.02-02, табл. 9.1 — проезды (1,5-2 м, принята верхняя граница); кустарник — 743-ПП, табл. 3.6.1, край проезжей части"
+
+- obstacle_category: footpath_edge
+  obstacle_subtype: null
+  tree_m: 0.7
+  shrub_m: 0.5
+  citation: "743-ПП, табл. 3.6.1; СП 42.13330.2016, табл. 9.1 — край тротуара и садовой дорожки"
+
+- obstacle_category: ditch_edge
+  obstacle_subtype: null
+  tree_m: 2.0
+  shrub_m: 1.0
+  citation: "743-ПП, табл. 3.6.1; СП 42.13330.2016, табл. 9.1 — бровка канавы"
+
+- obstacle_category: tram_tracks
+  obstacle_subtype: axis
+  tree_m: 5.0
+  shrub_m: 3.0
+  citation: "743-ПП, табл. 3.6.1 (МГСН 1.01-99) — ось трамвайных путей"
+
+- obstacle_category: tram_tracks
+  obstacle_subtype: bed_edge
+  tree_m: 5.0
+  shrub_m: 3.0
+  citation: "СП 42.13330.2016, табл. 9.1 — край трамвайного полотна"
+
+# --- Сооружения -----------------------------------------------------------
+
+- obstacle_category: poles_masts
+  obstacle_subtype: null
+  tree_m: 4.0
+  shrub_m: 4.0
+  citation: "743-ПП, табл. 3.6.1; СП 42.13330.2016, табл. 9.1 — мачта и опора осветительной сети, трамвая, мостовая опора и эстакада (для кустарника норма не установлена, принято значение для дерева)"
+
+- obstacle_category: retaining_walls_slopes
+  obstacle_subtype: slope
+  tree_m: 1.0
+  shrub_m: 0.5
+  citation: "743-ПП, табл. 3.6.1; СП 42.13330.2016, табл. 9.1 — подошва откоса, террасы"
+
+- obstacle_category: retaining_walls_slopes
+  obstacle_subtype: retaining_wall
+  tree_m: 3.0
+  shrub_m: 1.0
+  citation: "743-ПП, табл. 3.6.1; СП 42.13330.2016, табл. 9.1 — подошва или внутренняя грань подпорной стенки"
+
+# --- Подземные сети -------------------------------------------------------
 
 - obstacle_category: underground_utilities
   obstacle_subtype: gas
   tree_m: 1.5
   shrub_m: 1.5
-  citation: "743-ПП — газопровод"
+  citation: "743-ПП, табл. 3.6.1 — газопровод (для кустарника норма не установлена, принято значение для дерева)"
 
 - obstacle_category: underground_utilities
   obstacle_subtype: heat
   tree_m: 2.0
   shrub_m: 1.0
-  citation: "743-ПП — тепловая сеть"
+  citation: "743-ПП, табл. 3.6.1 — тепловая сеть (стенка канала, тоннеля или оболочка при бесканальной прокладке)"
 
 - obstacle_category: underground_utilities
   obstacle_subtype: water
   tree_m: 2.0
   shrub_m: 2.0
-  citation: "743-ПП — водопровод, дренаж"
+  citation: "743-ПП, табл. 3.6.1 — водопровод (для кустарника норма не установлена, принято значение для дерева)"
 
 - obstacle_category: underground_utilities
   obstacle_subtype: drainage
   tree_m: 2.0
   shrub_m: 2.0
-  citation: "743-ПП — водопровод, дренаж"
+  citation: "743-ПП, табл. 3.6.1 — дренаж (для кустарника норма не установлена, принято значение для дерева)"
 
 - obstacle_category: underground_utilities
   obstacle_subtype: sewer
   tree_m: 1.5
   shrub_m: 1.5
-  citation: "743-ПП — канализация, водосток"
+  citation: "743-ПП, табл. 3.6.1 — канализация (для кустарника норма не установлена, принято значение для дерева)"
 
 - obstacle_category: underground_utilities
   obstacle_subtype: power_cable
   tree_m: 2.0
   shrub_m: 0.7
-  citation: "743-ПП — силовой кабель и кабель связи"
+  citation: "743-ПП, табл. 3.6.1 — силовой кабель"
 
 - obstacle_category: underground_utilities
   obstacle_subtype: comm_cable
   tree_m: 2.0
   shrub_m: 0.7
-  citation: "743-ПП — силовой кабель и кабель связи"
+  citation: "743-ПП, табл. 3.6.1 — кабель связи"
 
 - obstacle_category: underground_utilities
   obstacle_subtype: other_utility
   tree_m: 2.0
   shrub_m: 2.0
-  citation: "743-ПП — неопознанная подземная сеть (консервативная норма)"
+  citation: "743-ПП, табл. 3.6.1 — неопознанная подземная сеть (консервативная норма)"
 
-- obstacle_category: road_edge
+# --- Воздушные линии электропередачи --------------------------------------
+# Distance from the outermost wire. Subtype = voltage class; null = voltage
+# unknown / insulated line (ВЛЗ) -- the table's generic "Воздушные линии" row.
+
+- obstacle_category: overhead_power_lines
   obstacle_subtype: null
-  tree_m: 0.7
-  shrub_m: 0.5
-  citation: "743-ПП — край тротуара/бортовой камень"
+  tree_m: 1.25
+  shrub_m: 1.25
+  citation: "ПУЭ — ВЛЗ: ширина просеки не менее расстояния между крайними проводами плюс 1,25 м в каждую сторону"
+
+- obstacle_category: overhead_power_lines
+  obstacle_subtype: lt_1kv
+  tree_m: 2.0
+  shrub_m: 2.0
+  citation: "ПП РФ № 160 от 24.02.2009 — охранная зона ВЛ до 1 кВ"
+
+- obstacle_category: overhead_power_lines
+  obstacle_subtype: kv_1_20
+  tree_m: 10.0
+  shrub_m: 10.0
+  citation: "ПП РФ № 160 от 24.02.2009 — охранная зона ВЛ 1-20 кВ (10 м; 5 м для самонесущих/изолированных проводов в населённых пунктах — принята большая величина)"
+
+- obstacle_category: overhead_power_lines
+  obstacle_subtype: kv_35
+  tree_m: 15.0
+  shrub_m: 15.0
+  citation: "ПП РФ № 160 от 24.02.2009 — охранная зона ВЛ 35 кВ"
+
+- obstacle_category: overhead_power_lines
+  obstacle_subtype: kv_110
+  tree_m: 20.0
+  shrub_m: 20.0
+  citation: "ПП РФ № 160 от 24.02.2009 — охранная зона ВЛ 110 кВ"
+
+- obstacle_category: overhead_power_lines
+  obstacle_subtype: kv_150_220
+  tree_m: 25.0
+  shrub_m: 25.0
+  citation: "ПП РФ № 160 от 24.02.2009 — охранная зона ВЛ 150, 220 кВ"
+
+- obstacle_category: overhead_power_lines
+  obstacle_subtype: kv_300_500
+  tree_m: 30.0
+  shrub_m: 30.0
+  citation: "ПП РФ № 160 от 24.02.2009 — охранная зона ВЛ 300, 500 кВ"
+
+- obstacle_category: overhead_power_lines
+  obstacle_subtype: kv_750
+  tree_m: 40.0
+  shrub_m: 40.0
+  citation: "ПП РФ № 160 от 24.02.2009 — охранная зона ВЛ 750 кВ"
+
+- obstacle_category: overhead_power_lines
+  obstacle_subtype: kv_1150
+  tree_m: 55.0
+  shrub_m: 55.0
+  citation: "ПП РФ № 160 от 24.02.2009 — охранная зона ВЛ 1150 кВ"
+
+# --- Существующие насаждения ----------------------------------------------
 
 - obstacle_category: green_existing
   obstacle_subtype: existing_tree
-  tree_m: 5.0
+  tree_m: 6.0
   shrub_m: 1.5
-  citation: "743-ПП — расстояние между озеленением, однорядная посадка (значение восстановлено из повреждённой Excel-ячейки, взята консервативная нижняя граница диапазона 5-6м)"
+  citation: "743-ПП, табл. 3.6.2 — расстояние между деревьями при однорядной посадке (5-6 м, принята верхняя граница)"

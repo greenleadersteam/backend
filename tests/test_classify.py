@@ -25,6 +25,13 @@ def test_insert_falls_back_to_block_name_when_layer_does_not_match():
     result = classifier.classify(entity)
     assert result is not None
     assert result.category == "retaining_walls_slopes"
+    assert result.subtype == "retaining_wall"
+
+
+def test_retaining_walls_and_slopes_get_distinct_subtypes():
+    classifier = RuleBasedClassifier(load_default_rule_pack())
+    assert classifier.classify(make_entity("Откосы")).subtype == "slope"
+    assert classifier.classify(make_entity("Подпорные стенки и откосы")).subtype == "retaining_wall"
 
 
 def test_non_insert_entity_does_not_check_block_name():

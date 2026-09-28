@@ -112,6 +112,11 @@
   status: auto
   layer_pattern: "откос|подпорн.*стенк|терас|террас"
   expand_blocks: true
+  subtypes:
+    # retaining_wall first: a mixed layer ("Подпорные стенки и откосы") gets
+    # the larger of the two setbacks
+    - {key: retaining_wall, pattern: "подпорн.*стенк"}
+    - {key: slope, pattern: "откос|терас|террас"}
 
 - id: "12"
   key: wells_hatches
