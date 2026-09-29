@@ -31,6 +31,9 @@ RUN useradd --create-home --uid 1000 greenplan \
     && mkdir -p /data \
     && chown -R greenplan:greenplan /data
 USER greenplan
+# Bake DuckDB's extensions into the image (~/.duckdb of this user), so
+# per-project Overture cache reads don't download them at request time.
+RUN python -c "import duckdb; duckdb.sql('INSTALL spatial; INSTALL httpfs')"
 
 ENV GREENPLAN_API_DATA_DIR=/data
 VOLUME ["/data"]

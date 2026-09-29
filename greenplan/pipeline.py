@@ -174,6 +174,100 @@ def georeference_feature_collection(
     return fc_utm, geo_result
 
 
+OVERTURE_CACHE_NAME = "moscow"
+# Beyond the project extent: the largest building setback (10m, schools) plus
+# room for a school ground that only partly overlaps the site.
+OVERTURE_QUERY_MARGIN_M = 50.0
+# Polygon parts farther than this from the largest one are drawing junk, not
+# part of the site (seen: 13m boundary-line stubs ~21km away on Старый Гай).
+_EXTENT_CLUSTER_DISTANCE_M = 500.0
+
+
+def _project_extent_utm(fc: FeatureCollection) -> tuple[float, float, float, float] | None:
+    """Bounds of the site boundary (else lawn) as zoning would build it, keeping
+    only the polygon parts clustered around the largest one."""
+    from greenplan.zoning.engine import _polygonal_union
+
+    for category, subtype in (("site_boundary", None), ("green_existing", "lawn")):
+        geoms = [f.geometry for f in fc.features if f.category == category and f.subtype == subtype]
+        area = _polygonal_union(geoms) if geoms else None
+        if area is None or area.is_empty:
+            continue
+        parts = list(area.geoms) if hasattr(area, "geoms") else [area]
+        largest = max(parts, key=lambda p: p.area)
+        core = [p for p in parts if p.distance(largest) <= _EXTENT_CLUSTER_DISTANCE_M]
+        minx, miny, maxx, maxy = zip(*(p.bounds for p in core))
+        return min(minx), min(miny), max(maxx), max(maxy)
+    return None
+
+
+def fuse_with_overture(
+    fc_utm: FeatureCollection,
+    utm_crs: str,
+    cache_dir: Path,
+    cache_name: str = OVERTURE_CACHE_NAME,
+):
+    """Merge Overture data from the local cache into a georeferenced (UTM)
+    FeatureCollection -- currently buildings only (see
+    greenplan.fusion.buildings). Returns (fc, BuildingFusionReport | None);
+    None (fc unchanged) when the cache has no usable building data, since a
+    missing/stale cache shouldn't fail a project that parsed fine.
+    """
+    from pyproj import Transformer
+    from shapely.geometry import box
+
+    from greenplan.fusion.buildings import EducationArea, OvertureBuilding, fuse_buildings
+    from greenplan.georeference.apply import reproject_fn
+    from greenplan.overture.reader import read_bbox, resolve_cache_file
+
+    buildings_file = resolve_cache_file(cache_dir, cache_name, "building")
+    if buildings_file is None:
+        log(f"WARN: no usable Overture 'building' data in cache {cache_dir} -- skipping Overture fusion")
+        return fc_utm, None
+    extent = _project_extent_utm(fc_utm)
+    if extent is None:
+        return fc_utm, None
+
+    m = OVERTURE_QUERY_MARGIN_M
+    query_utm = box(extent[0] - m, extent[1] - m, extent[2] + m, extent[3] + m)
+    to_wgs84 = Transformer.from_crs(utm_crs, "EPSG:4326", always_xy=True)
+    lons, lats = to_wgs84.transform(*query_utm.exterior.xy)
+    bbox_wgs84 = (min(lons), min(lats), max(lons), max(lats))
+    to_utm = reproject_fn("EPSG:4326", utm_crs)
+
+    path, release = buildings_file
+    rows = read_bbox(
+        path,
+        bbox_wgs84,
+        ["id", "class", "subtype", "height", "num_floors", "names.primary AS name"],
+        where="is_underground IS NOT TRUE",
+    )
+    overture_buildings = [
+        OvertureBuilding(
+            id=r["id"], geometry=to_utm(g), cls=r["class"], subtype=r["subtype"],
+            height=r["height"], num_floors=r["num_floors"], name=r["name"],
+        )
+        for r, g in rows
+    ]
+
+    education_areas: list[EducationArea] = []
+    land_use_file = resolve_cache_file(cache_dir, cache_name, "land_use")
+    if land_use_file is None:
+        log("WARN: no Overture 'land_use' data in cache -- school/kindergarten detection uses building class only")
+    else:
+        lu_rows = read_bbox(
+            land_use_file[0], bbox_wgs84, ["class"],
+            where="subtype = 'education' AND class IN ('school', 'kindergarten')",
+        )
+        education_areas = [EducationArea(geometry=to_utm(g), cls=r["class"]) for r, g in lu_rows]
+
+    fused, report = fuse_buildings(
+        fc_utm, overture_buildings, education_areas, source_label=f"overture:{release}"
+    )
+    log(f"Overture building fusion ({release}): {report.model_dump()}")
+    return fused, report
+
+
 def plant_folder(
     fc: FeatureCollection,
     norms: NormsTable | None = None,

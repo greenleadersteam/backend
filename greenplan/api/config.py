@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     # auto-selected per project, see CLAUDE.md.
     georeference_utm_epsg: str = "EPSG:32637"
 
+    # Shared Overture cache (`greenplan overture fetch --out-dir ...`); None
+    # means data_dir/overture_cache. A missing/empty cache just skips fusion.
+    overture_cache_dir: Path | None = None
+
+    @property
+    def resolved_overture_cache_dir(self) -> Path:
+        return self.overture_cache_dir or self.data_dir / "overture_cache"
+
     @property
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024

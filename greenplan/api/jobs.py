@@ -260,6 +260,7 @@ def run_processing_job(project_dir: Path) -> None:
     )
     from greenplan.io.dxf_sink import append_planting_layer
     from greenplan.pipeline import (
+        fuse_with_overture,
         georeference_feature_collection,
         load_default_planting_rules,
         parse_folder,
@@ -305,6 +306,7 @@ def run_processing_job(project_dir: Path) -> None:
                     min_matched_points=settings.georeference_min_points,
                     residual_threshold_m=settings.georeference_residual_threshold_m,
                 )
+            fc, _fusion = fuse_with_overture(fc, geo_result.utm_crs, settings.resolved_overture_cache_dir)
 
         if geo_result is not None:
             crs_label = WGS84_CRS_LABEL

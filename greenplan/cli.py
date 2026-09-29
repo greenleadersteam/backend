@@ -25,6 +25,7 @@ from greenplan.io.dxf_sink import append_planting_layer
 from greenplan.layout.rules import PlantingRuleSet
 from greenplan.norms.schema import NormsTable
 from greenplan.pipeline import (
+    fuse_with_overture,
     georeference_feature_collection,
     load_default_norms,
     load_default_planting_rules,
@@ -53,6 +54,11 @@ OUT_GEO_POINTS_HELP = (
     "(reprojected to WGS84 via the fitted transform) and the geobridge.ru point it was "
     "matched to, tagged by a 'source' property -- for manual QA of the fit. Only written "
     "with --bbox."
+)
+OVERTURE_CACHE_HELP = (
+    "Local Overture cache directory (see `greenplan overture fetch`). With --bbox, Overture "
+    "buildings are merged into the parsed plan; skipped with a warning if the cache has no "
+    "building data. Ignored without --bbox."
 )
 
 
@@ -92,6 +98,7 @@ def parse(
     bbox: Optional[str] = typer.Option(None, help=BBOX_HELP),
     max_residual_m: float = typer.Option(DEFAULT_RESIDUAL_THRESHOLD_M, help=MAX_RESIDUAL_HELP),
     out_geo_points: Path = typer.Option(Path("geo_points.geojson"), help=OUT_GEO_POINTS_HELP),
+    overture_cache: Path = typer.Option(Path("data/overture_cache"), help=OVERTURE_CACHE_HELP),
 ) -> None:
     """Parse a DXF project delivery folder into a canonical GeoJSON FeatureCollection."""
     rule_pack = RulePack.load(rules) if rules else load_default_rule_pack()
@@ -106,6 +113,7 @@ def parse(
                 fc, _parse_bbox(bbox), client=http_client, residual_threshold_m=max_residual_m
             )
         typer.echo(_geo_status_line(geo_result), err=True)
+        fc_utm, _fusion = fuse_with_overture(fc_utm, geo_result.utm_crs, overture_cache)
         fc = transform_feature_collection(fc_utm, reproject_fn(geo_result.utm_crs))
         crs = WGS84_CRS_LABEL
         out_geo_points.write_text(
@@ -164,6 +172,7 @@ def plant(
     bbox: Optional[str] = typer.Option(None, help=BBOX_HELP),
     max_residual_m: float = typer.Option(DEFAULT_RESIDUAL_THRESHOLD_M, help=MAX_RESIDUAL_HELP),
     out_geo_points: Path = typer.Option(Path("geo_points.geojson"), help=OUT_GEO_POINTS_HELP),
+    overture_cache: Path = typer.Option(Path("data/overture_cache"), help=OVERTURE_CACHE_HELP),
 ) -> None:
     """Parse (or load) a project delivery, compute allowed/prohibited planting zones, lay
     out new trees/shrubs, and export DXF + GeoJSON + explanation results."""
@@ -198,6 +207,7 @@ def plant(
             json.dumps(georeference_points_to_geojson(geo_result), ensure_ascii=False, indent=2)
         )
         typer.echo(f"Wrote geodetic reference points to {out_geo_points}", err=True)
+        fc, _fusion = fuse_with_overture(fc, geo_result.utm_crs, overture_cache)
 
     zoning, points, explanations = plant_folder(
         fc, norms=norms_table, planting_rules=planting_rule_set, verbose=verbose
