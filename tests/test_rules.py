@@ -3,9 +3,9 @@ from greenplan.pipeline import load_default_rule_pack
 
 def test_default_rule_pack_loads():
     pack = load_default_rule_pack()
-    assert len(pack.rules) == 12
+    assert len(pack.rules) == 15
     ids = {c.rule.id for c in pack.rules}
-    assert ids == {"1", "3", "4", "5", "6", "7", "8", "11", "12", "19", "20", "90"}
+    assert ids == {"1", "3", "4", "5", "5a", "5b", "6", "7", "8", "11", "12", "19", "20", "90", "91"}
 
 
 def test_layer_matching_first_rule_wins():
@@ -61,3 +61,17 @@ def test_block_pattern_falls_back_to_layer_pattern():
     pack = load_default_rule_pack()
     compiled = pack.match_layer("Здания")
     assert compiled.block_regex.search("Части зданий")
+
+
+def test_road_and_street_furniture_layers():
+    pack = load_default_rule_pack()
+    assert pack.match_layer("ДВ_ГП_П_Борт_БР100.30.15").rule.key == "road_edge"
+    assert pack.match_layer("Бортовой камень").rule.key == "road_edge"
+    assert pack.match_layer("ДВ_ГП_П_ДО_ПЧ").rule.id == "5b"
+    hint = pack.match_layer("ДВ_ПП_ДО_Тип1_Ремонт_покрытия_ПЧ_магистральные")
+    assert hint.rule.id == "5a" and hint.rule.key == "carriageway"
+    assert pack.match_layer("ДВ_ПП_ДО_Тип5б_Капремонт_трот").rule.key == "footpath_edge"
+    for layer in ("Фонари", "Столбы", "Светофоры"):
+        assert pack.match_layer(layer).rule.key == "poles_masts"
+    assert pack.match_layer("Фонтаны") is None
+    assert pack.match_layer("ЛЭП").rule.key == "overhead_power_lines"

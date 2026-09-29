@@ -103,3 +103,15 @@ def test_unknown_plant_type_rule_is_skipped_not_fatal():
         rules=[PlantingRule(id="X", plant_type="shrub", placement="grid_fill", name_ru="x", spacing_m=5.0)],
     )
     assert generate_layout(zoning, fc, rules) == []
+
+
+def test_row_offset_clears_the_kerbs_street_category_setback():
+    from greenplan.layout.engine import _row_offset
+    from greenplan.layout.rules import PlantingRule
+    from greenplan.pipeline import load_default_norms
+
+    norms = load_default_norms()
+    row = PlantingRule(id="R", plant_type="tree", placement="row_along_curb", name_ru="r", spacing_m=6, offset_m=2.2)
+    assert _row_offset(row, None, norms) == pytest.approx(2.2)
+    assert _row_offset(row, "arterial_citywide", norms) == pytest.approx(7.2)
+    assert _row_offset(row, "arterial_citywide", None) == pytest.approx(2.2)

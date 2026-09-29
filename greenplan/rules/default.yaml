@@ -65,15 +65,38 @@
   name_ru: "Улично-дорожная сеть (край проезжей части — прокси: бортовой камень/kerb)"
   group: 1
   status: proxy_low_confidence
-  layer_pattern: "бортовой камень|\\bkerb\\b|\\bcurb\\b"
+  # "_Борт_": designed kerbs ("ДВ_ГП_П_Борт_БР100.30.15", "..._Борт_Пониженный")
+  layer_pattern: "бортовой камень|_борт_|\\bkerb\\b|\\bcurb\\b"
   expand_blocks: true
+
+# Carriageway surface. Two rules, same category: pavement-work fills naming a
+# street category ("ДВ_ПП_ДО_Тип1_Ремонт_покрытия_ПЧ_магистральные") carry it
+# as a subtype hint; plain carriageway polygons ("ДВ_ГП_П_ДО_ПЧ") have none.
+# greenplan.fusion.roads refines both into a final street category.
+- id: "5a"
+  key: carriageway
+  name_ru: "Проезжая часть (с указанием категории улицы в проекте)"
+  group: 1
+  status: auto
+  layer_pattern: "ДО_Тип.*(магистрал|местн)"
+  subtypes:
+    - {key: arterial, pattern: "магистрал"}
+    - {key: local, pattern: "местн"}
+
+- id: "5b"
+  key: carriageway
+  name_ru: "Проезжая часть"
+  group: 1
+  status: auto
+  layer_pattern: "ДО_ПЧ|проезж.*част"
 
 - id: "6"
   key: footpath_edge
   name_ru: "Дорожно-тропиночная сеть и тротуары (край покрытия)"
   group: 1
   status: no_default_source
-  layer_pattern: "тротуар|дорожно.?тропин|пешеход|sidewalk"
+  # "_трот": pavement-work fills ("ДВ_ПП_ДО_Тип5б_Капремонт_трот")
+  layer_pattern: "тротуар|_трот|дорожно.?тропин|пешеход|sidewalk"
 
 - id: "7"
   key: green_existing
@@ -103,7 +126,18 @@
   name_ru: "Опоры и мачты"
   group: 2
   status: auto
-  layer_pattern: "опор|мачт|колонн"
+  # "Фонари"/"Столбы"/"Светофоры": survey layers for lamp posts, poles and
+  # traffic-light posts (present in ~19 of 20 pilot objects)
+  layer_pattern: "опор|мачт|колонн|фонар|столб|светофор"
+
+- id: "91"
+  key: overhead_power_lines
+  name_ru: "Воздушные линии электропередачи"
+  group: 2
+  status: auto_partial
+  # Voltage isn't in the layer name ("ЛЭП"), so no subtype: the generic
+  # overhead-line norm applies until a voltage source (e.g. Overture) exists.
+  layer_pattern: "ЛЭП|\\bВЛ\\b|воздушн.*лини"
 
 - id: "11"
   key: retaining_walls_slopes

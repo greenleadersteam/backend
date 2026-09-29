@@ -3,7 +3,7 @@ from greenplan.pipeline import load_default_norms
 
 def test_default_norms_load():
     norms = load_default_norms()
-    assert len(norms.rules) == 32
+    assert len(norms.rules) == 39
     keys = [(r.obstacle_category, r.obstacle_subtype) for r in norms.rules]
     assert len(keys) == len(set(keys))
 

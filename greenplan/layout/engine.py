@@ -20,40 +20,66 @@ from shapely.strtree import STRtree
 from greenplan.layout.rules import PlantingRule, PlantingRuleSet
 from greenplan.layout.spacing import min_distance, thin
 from greenplan.model import FeatureCollection, PlantingPoint, ZoningResult
+from greenplan.norms.schema import NormsTable
 
 
 def log(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
-def _curb_linestrings(fc: FeatureCollection) -> list[LineString]:
-    lines: list[LineString] = []
+def _curb_linestrings(fc: FeatureCollection) -> list[tuple[LineString, str | None]]:
+    """(line, road_edge subtype) pairs -- the subtype (street category) picks
+    the kerb's setback, see _row_offset."""
+    lines: list[tuple[LineString, str | None]] = []
     for f in fc.features:
         if f.category != "road_edge":
             continue
         geom = f.geometry
         if geom.geom_type == "LineString":
-            lines.append(geom)
+            parts = [geom]
         elif geom.geom_type == "MultiLineString":
-            lines.extend(geom.geoms)
+            parts = list(geom.geoms)
         elif geom.geom_type == "Polygon":
-            lines.append(LineString(geom.exterior.coords))
-            lines.extend(LineString(ring.coords) for ring in geom.interiors)
+            parts = [LineString(geom.exterior.coords)] + [LineString(r.coords) for r in geom.interiors]
         elif geom.geom_type == "MultiPolygon":
-            for poly in geom.geoms:
-                lines.append(LineString(poly.exterior.coords))
-                lines.extend(LineString(ring.coords) for ring in poly.interiors)
-    return [line for line in lines if line.length > 0]
+            parts = [
+                LineString(ring.coords)
+                for poly in geom.geoms
+                for ring in (poly.exterior, *poly.interiors)
+            ]
+        else:
+            parts = []
+        lines.extend((line, f.subtype) for line in parts if line.length > 0)
+    return lines
+
+
+# A row sits this far beyond its kerb's setback, so it isn't lost to
+# floating-point contact with the prohibited zone's edge.
+_ROW_SETBACK_CLEARANCE_M = 0.2
+
+
+def _row_offset(rule: PlantingRule, subtype: str | None, norms: NormsTable | None) -> float:
+    """The rule's own offset, pushed out to clear the kerb's setback -- e.g. 7m
+    along a citywide arterial, where the default 2.2m row would all be
+    prohibited."""
+    if norms is None:
+        return rule.offset_m
+    setback = norms.distance_for("road_edge", subtype, rule.plant_type)
+    if setback is None:
+        return rule.offset_m
+    return max(rule.offset_m, setback + _ROW_SETBACK_CLEARANCE_M)
 
 
 def _row_along_curb(
-    curbs, allowed_prepared, occupied_tree, occupied_pts, rule: PlantingRule, verbose: bool = False
+    curbs, allowed_prepared, occupied_tree, occupied_pts, rule: PlantingRule,
+    norms: NormsTable | None = None, verbose: bool = False,
 ) -> list[Point]:
     candidates: list[Point] = []
     sample_positions = 0
     inside_allowed = 0
     passed_spacing = 0
-    for curb in curbs:
+    for curb, subtype in curbs:
+        offset = _row_offset(rule, subtype, norms)
         length = curb.length
         if length == 0:
             continue
@@ -67,7 +93,7 @@ def _row_along_curb(
             norm = math.hypot(dx, dy) or 1.0
             nx, ny = -dy / norm, dx / norm
             for side in (1, -1):
-                cand = Point(base.x + nx * side * rule.offset_m, base.y + ny * side * rule.offset_m)
+                cand = Point(base.x + nx * side * offset, base.y + ny * side * offset)
                 if not allowed_prepared.contains(cand):
                     continue
                 inside_allowed += 1
@@ -125,12 +151,13 @@ def generate_layout(
     fc: FeatureCollection,
     planting_rules: PlantingRuleSet,
     verbose: bool = False,
+    norms: NormsTable | None = None,
 ) -> list[PlantingPoint]:
     curbs = _curb_linestrings(fc)
     if not curbs:
         log("WARN: no curb/kerb geometry found -- row/hedge placement rules will produce nothing")
     elif verbose:
-        log(f"Curbs: {len(curbs)} line(s), {sum(c.length for c in curbs):.1f} m total length")
+        log(f"Curbs: {len(curbs)} line(s), {sum(c.length for c, _ in curbs):.1f} m total length")
 
     placed_by_type: dict[str, list[Point]] = {pt: [] for pt in zoning.plant_types}
     results: list[PlantingPoint] = []
@@ -154,7 +181,7 @@ def generate_layout(
 
         if rule.placement == "row_along_curb":
             new_points = _row_along_curb(
-                curbs, allowed_prepared, occupied_tree, occupied_pts, rule, verbose=verbose
+                curbs, allowed_prepared, occupied_tree, occupied_pts, rule, norms=norms, verbose=verbose
             )
         elif rule.placement == "grid_fill":
             new_points = _grid_fill(

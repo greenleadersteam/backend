@@ -201,6 +201,14 @@ def _project_extent_utm(fc: FeatureCollection) -> tuple[float, float, float, flo
     return None
 
 
+def _whole_segment_off_ground(road_flags) -> bool:
+    """A tunnel/bridge flag covering the whole segment (between is null)."""
+    for flag in road_flags or []:
+        if flag.get("between") is None and {"is_tunnel", "is_bridge"} & set(flag.get("values") or []):
+            return True
+    return False
+
+
 def fuse_with_overture(
     fc_utm: FeatureCollection,
     utm_crs: str,
@@ -208,25 +216,26 @@ def fuse_with_overture(
     cache_name: str = OVERTURE_CACHE_NAME,
 ):
     """Merge Overture data from the local cache into a georeferenced (UTM)
-    FeatureCollection -- currently buildings only (see
-    greenplan.fusion.buildings). Returns (fc, BuildingFusionReport | None);
-    None (fc unchanged) when the cache has no usable building data, since a
-    missing/stale cache shouldn't fail a project that parsed fine.
+    FeatureCollection: buildings (greenplan.fusion.buildings), then roads
+    (greenplan.fusion.roads -- after buildings, since building footprints are
+    barriers for the road faces). Each step is skipped with a warning if its
+    Overture type isn't in the cache, since a missing/stale cache shouldn't
+    fail a project that parsed fine. Returns (fc, {"buildings": report|None,
+    "roads": report|None}).
     """
     from pyproj import Transformer
     from shapely.geometry import box
 
     from greenplan.fusion.buildings import EducationArea, OvertureBuilding, fuse_buildings
+    from greenplan.fusion.roads import RoadSegment, fuse_roads
     from greenplan.georeference.apply import reproject_fn
     from greenplan.overture.reader import read_bbox, resolve_cache_file
 
-    buildings_file = resolve_cache_file(cache_dir, cache_name, "building")
-    if buildings_file is None:
-        log(f"WARN: no usable Overture 'building' data in cache {cache_dir} -- skipping Overture fusion")
-        return fc_utm, None
+    reports = {"buildings": None, "roads": None}
     extent = _project_extent_utm(fc_utm)
     if extent is None:
-        return fc_utm, None
+        log("WARN: no site boundary or lawn to derive a project extent from -- skipping Overture fusion")
+        return fc_utm, reports
 
     m = OVERTURE_QUERY_MARGIN_M
     query_utm = box(extent[0] - m, extent[1] - m, extent[2] + m, extent[3] + m)
@@ -235,37 +244,56 @@ def fuse_with_overture(
     bbox_wgs84 = (min(lons), min(lats), max(lons), max(lats))
     to_utm = reproject_fn("EPSG:4326", utm_crs)
 
-    path, release = buildings_file
-    rows = read_bbox(
-        path,
-        bbox_wgs84,
-        ["id", "class", "subtype", "height", "num_floors", "names.primary AS name"],
-        where="is_underground IS NOT TRUE",
-    )
-    overture_buildings = [
-        OvertureBuilding(
-            id=r["id"], geometry=to_utm(g), cls=r["class"], subtype=r["subtype"],
-            height=r["height"], num_floors=r["num_floors"], name=r["name"],
-        )
-        for r, g in rows
-    ]
-
-    education_areas: list[EducationArea] = []
-    land_use_file = resolve_cache_file(cache_dir, cache_name, "land_use")
-    if land_use_file is None:
-        log("WARN: no Overture 'land_use' data in cache -- school/kindergarten detection uses building class only")
+    buildings_file = resolve_cache_file(cache_dir, cache_name, "building")
+    if buildings_file is None:
+        log(f"WARN: no usable Overture 'building' data in cache {cache_dir} -- skipping building fusion")
     else:
-        lu_rows = read_bbox(
-            land_use_file[0], bbox_wgs84, ["class"],
-            where="subtype = 'education' AND class IN ('school', 'kindergarten')",
+        path, release = buildings_file
+        rows = read_bbox(
+            path,
+            bbox_wgs84,
+            ["id", "class", "subtype", "height", "num_floors", "names.primary AS name"],
+            where="is_underground IS NOT TRUE",
         )
-        education_areas = [EducationArea(geometry=to_utm(g), cls=r["class"]) for r, g in lu_rows]
+        overture_buildings = [
+            OvertureBuilding(
+                id=r["id"], geometry=to_utm(g), cls=r["class"], subtype=r["subtype"],
+                height=r["height"], num_floors=r["num_floors"], name=r["name"],
+            )
+            for r, g in rows
+        ]
 
-    fused, report = fuse_buildings(
-        fc_utm, overture_buildings, education_areas, source_label=f"overture:{release}"
-    )
-    log(f"Overture building fusion ({release}): {report.model_dump()}")
-    return fused, report
+        education_areas: list[EducationArea] = []
+        land_use_file = resolve_cache_file(cache_dir, cache_name, "land_use")
+        if land_use_file is None:
+            log("WARN: no Overture 'land_use' data in cache -- school/kindergarten detection uses building class only")
+        else:
+            lu_rows = read_bbox(
+                land_use_file[0], bbox_wgs84, ["class"],
+                where="subtype = 'education' AND class IN ('school', 'kindergarten')",
+            )
+            education_areas = [EducationArea(geometry=to_utm(g), cls=r["class"]) for r, g in lu_rows]
+
+        fc_utm, reports["buildings"] = fuse_buildings(
+            fc_utm, overture_buildings, education_areas, source_label=f"overture:{release}"
+        )
+        log(f"Overture building fusion ({release}): {reports['buildings'].model_dump()}")
+
+    segment_file = resolve_cache_file(cache_dir, cache_name, "segment")
+    if segment_file is None:
+        log(f"WARN: no usable Overture 'segment' data in cache {cache_dir} -- skipping road fusion")
+    else:
+        path, release = segment_file
+        rows = read_bbox(path, bbox_wgs84, ["id", "class", "road_flags"], where="subtype = 'road'")
+        segments = [
+            RoadSegment(id=r["id"], geometry=to_utm(g), cls=r["class"])
+            for r, g in rows
+            if not _whole_segment_off_ground(r["road_flags"])
+        ]
+        fc_utm, reports["roads"] = fuse_roads(fc_utm, segments, query_utm, source_label=f"overture:{release}")
+        log(f"Overture road fusion ({release}): {reports['roads'].model_dump()}")
+
+    return fc_utm, reports
 
 
 def plant_folder(
@@ -282,6 +310,6 @@ def plant_folder(
     planting_rules = planting_rules or load_default_planting_rules()
 
     zoning = compute_zones(fc, norms, verbose=verbose)
-    points = generate_layout(zoning, fc, planting_rules, verbose=verbose)
+    points = generate_layout(zoning, fc, planting_rules, verbose=verbose, norms=norms)
     explanations = build_explanations(points, planting_rules)
     return zoning, points, explanations

@@ -165,7 +165,8 @@ greenplan/
                         cache" below. client.py (DuckDB fetch-to-GeoParquet),
                         cache.py (manifest/freshness bookkeeping), reader.py
                         (per-project bbox reads from the cache)
-  fusion/buildings.py      merge plan buildings with Overture footprints -- see
+  fusion/                  buildings.py (plan + Overture footprints), roads.py
+                        (carriageway polygons + kerb classification) -- see
                         "Overture fusion" below
   pipeline.py              parse_folder() and plant_folder(), the two orchestration
                         entry points; load_default_* helpers for each YAML config.
@@ -576,9 +577,46 @@ outside the surveyed strip rather than conflicting with it. 7 school/kindergarte
 buildings, none within 10m of the plantable area. Zoning effect: tree-allowed area
 1955 → 1895 m² (−3%), planting points 1179 → 1161.
 
+Roads (`fusion/roads.py`, after buildings -- footprints are face barriers):
+1. Carriageway polygons (`category="carriageway"`, subtype = street category):
+   A. plan fills (`ДВ_ГП_П_ДО_ПЧ`, rule 5b; pavement-work fills
+   `ДВ_ПП_ДО_Тип*_…_магистральные/_Местные`, rule 5a, subtype hint arterial/local);
+   B. faces: barrier lines (kerbs, footpath edges, buildings, lawn edges, site boundary,
+   plan carriageway edges) thickened by 0.5m -- survey kerbs are dashed linetypes
+   exploded into 0.7m pieces with 0.5m gaps -- then free space split into faces; a face
+   crossed by an Overture vehicle centerline is carriageway, as-is if it lies mostly
+   within 2×default half-width+3m of it (`fused_kerb_bounded`), else clipped to the
+   default half-width (`fused_default_width`). Plan lawns/footpaths/buildings/tier A win.
+   Whole-segment tunnels/bridges are skipped.
+2. Street category: plan hint decides arterial vs local; Overture class decides
+   citywide vs district within arterials (motorway/trunk/primary → citywide), and
+   everything when there's no hint (secondary → district, tertiary/residential/
+   unclassified/living_street → local, service → driveway). Several → the higher one.
+   `arterial` (hint, no Overture) → 7m.
+3. Kerbs within the extent: along a carriageway edge (±1.5m) → `road_edge/<category>`;
+   within 25m of a carriageway but not on its edge → `footpath_edge` (sidewalk/lawn
+   kerb, 0.7/0.5m); otherwise unchanged (`road_edge`, generic 2/1m).
+4. No new zone type (API unchanged): carriageway polygons are ordinary obstacles,
+   polygon buffer = surface + setback from its edge.
+5. Layout: kerb rows are offset by max(rule offset, the kerb's setback + 0.2m).
+
+Also new parser rules: designed kerbs (`_Борт_`), lamp posts/poles/traffic lights
+(`Фонари`/`Столбы`/`Светофоры` → poles_masts, 4m), `ЛЭП` → overhead_power_lines
+(generic 1.25m, voltage unknown), sidewalk pavement-work fills (`_трот`).
+
+Measured on Старый Гай: tier B alone vs the plan's own carriageway polygons inside the
+site boundary: precision 1.00, recall 0.87 (IoU 0.87), all from kerb-bounded faces.
+Zoning with vs without Overture (same new rules): tree-allowed 1382 → 1595 m² (+15%),
+shrub 7564 → 8375 m²; kerb hedge points drop (711 → 182) since sidewalk kerbs are no
+longer `road_edge`. A second validation object wasn't possible: the only uploads with
+plan carriageway polygons either lack geodetic points (Камчатская design file) or
+fail georeferencing (Камчатская full upload, 3.5m residual).
+
 Open: no "outside survey coverage" vs "inside but absent" distinction yet; fusion
-stats aren't surfaced in `job.yaml`/API responses (logged only); roads/other types
-not fused yet.
+stats aren't surfaced in `job.yaml`/API responses (logged only); Overture power-line
+voltage/lamp posts, water/ditches, tram rails not fused yet; kerbs of a road missing
+from both plan and Overture but within 25m of a known one are misread as sidewalk
+kerbs (0.7m instead of 2m).
 
 ## API layer
 
