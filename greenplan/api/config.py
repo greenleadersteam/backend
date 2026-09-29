@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     geobridge_base_url: str = "https://geobridge.ru/maps/pp/api"
     geobridge_timeout_s: float = Field(default=10.0, gt=0)
     georeference_min_points: int = Field(default=2, ge=2)
-    georeference_residual_threshold_m: float = Field(default=1.0, gt=0)
+    georeference_residual_threshold_m: float = Field(default=3.0, gt=0)
     # UTM zone 37N -- covers Moscow, the only pilot-object scope today; not
     # auto-selected per project, see CLAUDE.md.
     georeference_utm_epsg: str = "EPSG:32637"
