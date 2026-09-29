@@ -25,12 +25,11 @@ from greenplan.io.dxf_source import NoDxfFilesError, collect_entities, detect_ro
 from greenplan.layout.engine import generate_layout
 from greenplan.layout.rules import PlantingRuleSet
 from greenplan.model import Feature, FeatureCollection, PlantingPoint, ZoningResult
-from greenplan.norms.schema import NormsTable
+from greenplan.norms.schema import DEFAULT_NORMS_PATH, NormsTable
 from greenplan.rules.schema import RulePack
 from greenplan.zoning.engine import compute_zones
 
 DEFAULT_RULE_PACK_PATH = Path(__file__).parent / "rules" / "default.yaml"
-DEFAULT_NORMS_PATH = Path(__file__).parent / "norms" / "default.yaml"
 DEFAULT_PLANTING_RULES_PATH = Path(__file__).parent / "layout" / "default.yaml"
 
 

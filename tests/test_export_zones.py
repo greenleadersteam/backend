@@ -43,3 +43,21 @@ def test_missing_site_boundary_is_omitted_not_crashed():
     zone_types = [f["properties"]["zone_type"] for f in geojson["features"]]
     assert "site_boundary" not in zone_types
     assert "lawn_raw" in zone_types
+
+
+def test_prohibited_zone_exports_norm_source():
+    from greenplan.model import ProhibitedZone
+
+    zoning = _zoning_with_extents()
+    zoning.prohibited = [ProhibitedZone(
+        geometry=Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]), plant_type="shrub",
+        obstacle_category="underground_utilities", obstacle_subtype="gas", distance_m=1.5,
+        citation="Значение сервиса — газопровод", reason="r", norm_id="743-pp-gas-shrub",
+        basis="service_default", clause=None, source_url="https://example.org",
+    )]
+    [props] = [f["properties"] for f in zoning_result_to_geojson(zoning)["features"]
+               if f["properties"]["zone_type"] == "prohibited"]
+    assert props["norm_id"] == "743-pp-gas-shrub"
+    assert props["basis"] == "service_default"
+    assert props["clause"] is None
+    assert props["source_url"] == "https://example.org"

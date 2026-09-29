@@ -91,6 +91,21 @@ def test_prohibited_zones_carry_citation_and_reason(fc, norms):
         assert zone.obstacle_subtype == "gas"
         assert zone.citation == "test citation"
         assert "газ" in zone.reason.lower() or "gas" in zone.reason.lower()
+        assert zone.norm_id == f"underground_utilities-gas-{zone.plant_type}"
+        assert zone.basis == "regulation"
+
+
+def test_service_default_shrub_zone_gets_its_own_citation(fc):
+    from greenplan.pipeline import load_default_norms
+
+    zoning = compute_zones(fc, load_default_norms())
+    gas = {z.plant_type: z for z in zoning.prohibited if z.obstacle_subtype == "gas"}
+    assert gas["tree"].norm_id == "743-pp-gas-tree"
+    assert gas["tree"].clause.startswith("п. 3.6.3")
+    assert "743-ПП" in gas["tree"].citation
+    assert gas["shrub"].basis == "service_default"
+    assert gas["shrub"].clause is None
+    assert "743-ПП" not in gas["shrub"].citation
 
 
 def test_uncovered_categories_flags_buildings_but_not_structural_ones(fc, norms):

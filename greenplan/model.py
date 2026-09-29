@@ -55,6 +55,12 @@ class ProhibitedZone(BaseModel):
     distance_m: float
     citation: str
     reason: str
+    # Source of the norm (greenplan.norms.schema.Norm): its id, whether the
+    # value is from an act or the service's own, and the act's clause/URL.
+    norm_id: str | None = None
+    basis: str | None = None
+    clause: str | None = None
+    source_url: str | None = None
 
 
 class ZoningResult(BaseModel):

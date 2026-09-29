@@ -45,7 +45,7 @@ app's editor) -- see "Planting versions".
 
 - `greenplan/` — the installable package (Poetry, `pyproject.toml` in this directory).
   `greenplan = "greenplan.cli:app"` is registered as a console script.
-- `tests/` — pytest suite, 161 tests, all passing (`.venv/bin/python -m pytest tests/ -q`).
+- `tests/` — pytest suite, 195 tests, all passing (`.venv/bin/python -m pytest tests/ -q`).
 - `../Пилотный проект 20 улиц/` — the full pilot dataset, all 20 objects, each with a
   real, usable `Исходные данные`-equivalent source-data folder (naming varies:
   `Исходные данные`/`ИСХОДНЫЕ ДАННЫЙ`/`Исходные данный`; object 2 has no such folder
@@ -128,8 +128,19 @@ greenplan/
                         `reference_setback_rules_sheet.md`), cross-checked against
                         743-ПП табл. 3.6.1/3.6.2, СП 42 табл. 9.1, МГСН 1.02-02 табл.
                         9.1. Ranges -> upper bound; "-" shrub -> tree value. Some
-                        subtypes (school buildings, street categories, power-line
-                        voltages) have no producer yet -- intended for Overture fusion
+                        subtypes (power-line voltages) have no producer yet.
+                        Each row also has a stable `id`, `act`, `source_url` and
+                        per-plant-type `tree`/`shrub` {basis, clause, text,
+                        citation?}: `basis: regulation` (value from the act, with
+                        its clause) vs `service_default` (the service's own value
+                        where the act sets none -- shrub "-" rows for gas/water/
+                        drainage/sewer/masts, other_utility, existing_tree; no
+                        clause, and a citation that doesn't name the act).
+                        `norms/schema.py:SetbackRule.norm(plant_type)` resolves one
+                        `Norm` record (= `GET /norms` entry, id `<row id>-tree`/
+                        `-shrub`; the frontend's ids come from
+                        `frontend/contracts/norms-verified.md`). Pydantic/yaml
+                        only, imported by the API process
   zoning/
     engine.py             compute_zones(): lawn ∩ site_boundary -> base_area; buffer
                           each norms-covered obstacle category, subtract from
@@ -243,7 +254,9 @@ One `FeatureCollection`, every feature tagged `zone_type`:
   discrepancy comes from.
 - `allowed` (one per `plant_type`: tree/shrub) — the final plantable polygon.
 - `prohibited` (grouped by obstacle category/subtype × plant_type, ~15-20 features) —
-  each carries `distance_m`, `citation`, `reason`.
+  each carries `distance_m`, `citation`, `reason`, plus the norm's source:
+  `norm_id` (a `GET /norms` id), `basis`, `clause`, `source_url`. `citation` is per
+  plant type (a `service_default` shrub value doesn't cite 743-ПП).
 
 ## Known data landmines (read before touching zoning/geometry code)
 
@@ -398,7 +411,7 @@ before "fixing" something that looks like a duplicate of one of these:
 
 ## Testing
 
-`.venv/bin/python -m pytest tests/ -q` — 161 tests, all synthetic/
+`.venv/bin/python -m pytest tests/ -q` — 195 tests, all synthetic/
 unit-level (no real DXF files, no real network -- `georeference`'s geobridge client and
 `overture`'s DuckDB/S3 fetch are both untested by this suite, since they need real
 network access; the API tests use a throwaway empty DXF from `ezdxf.new()` plus
@@ -655,6 +668,8 @@ api/
                (concurrency-limit gate + submits to a concurrent.futures.Executor)
   plantings.py versioned planting plans (processed/plantings/{n}/): version
                metadata, applying edits, v1 creation -- see "Planting versions"
+  obstacles.py processed/obstacles.geojson for GET /obstacles -- see "Obstacles
+               and norms endpoints"
   schemas.py   request/response pydantic models
   app.py       create_app() factory (route handlers + lifespan startup/shutdown);
                module-level `app` is the production entrypoint
@@ -742,6 +757,32 @@ reasoning):
   not noise — see landmines #9-13 above, all four found this way, not by reasoning
   about the code. **Still not done:** none of this is a committed *pytest*
   integration test (see "Testing"), and there's no `root_hint` capability (see above).
+
+## Obstacles and norms endpoints
+
+For the frontend's exact distance checks (its `obstacles`/`norms` capabilities,
+`frontend/contracts/openapi.proposed.yaml`).
+
+- `GET /norms` — `NormsTable.norms()`: two records per `norms/default.yaml` row
+  (see "Package layout"), loaded once at startup.
+- `GET /projects/{id}/obstacles` — `processed/obstacles.geojson`, same CRS as
+  `/zones`. A filtered `parsed.geojson` (20-150 MB on real objects): only
+  (category, subtype) pairs with a norm plus `site_boundary`; bbox-clipped to
+  zoning's `base_area` + 60 m (not to raw `site_boundary` features -- one real object's
+  only boundary feature is a 10 m stub 166 km away); coordinates rounded to ~1 cm;
+  `GeometryCollection`/`MultiPoint` split into parts (the frontend's geometry
+  switch knows only Point/(Multi)LineString/(Multi)Polygon); server paths
+  (`root_file`, `source_folder`, `source_file`) dropped. Measured on 4 real
+  objects: 8-52 MB (the largest survey covers mostly its own site; Caddy gzips
+  `/api/*`).
+- `run_processing_job` now writes `parsed.geojson` + unclipped `obstacles.geojson`
+  in the drawing frame right after parsing, rewrites both in WGS84 after
+  georeferencing, and writes the clipped obstacles after zoning. So a project that
+  failed at georeferencing still serves `/obstacles` (drawing frame) -- the
+  frontend's manual-georeferencing fallback uses its site boundary. Served for
+  `ready`/`failed` projects only; 404 if the job failed before parsing.
+  Projects processed before this get `obstacles.geojson` built lazily on first
+  request (in the API process, pure dicts, under a lock).
 
 ## Planting versions
 

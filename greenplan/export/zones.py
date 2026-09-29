@@ -89,6 +89,10 @@ def zoning_result_to_geojson(zoning: ZoningResult, crs: str = NO_CRS_LABEL) -> d
                     "distance_m": zone.distance_m,
                     "citation": zone.citation,
                     "reason": zone.reason,
+                    "norm_id": zone.norm_id,
+                    "basis": zone.basis,
+                    "clause": zone.clause,
+                    "source_url": zone.source_url,
                 },
             }
         )

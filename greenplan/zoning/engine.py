@@ -121,7 +121,8 @@ def compute_zones(
             continue
 
         for plant_type in plant_types:
-            distance = rule.tree_m if plant_type == "tree" else rule.shrub_m
+            norm = rule.norm(plant_type)
+            distance = norm.distance_m
             # Buffer each obstacle individually, THEN union the resulting
             # polygons -- buffering a single already-unioned geometry (e.g. a
             # MultiPoint of thousands of existing trees) is pathologically
@@ -145,7 +146,11 @@ def compute_zones(
                     obstacle_category=rule.obstacle_category,
                     obstacle_subtype=rule.obstacle_subtype,
                     distance_m=distance,
-                    citation=rule.citation,
+                    citation=norm.citation,
+                    norm_id=norm.id,
+                    basis=norm.basis,
+                    clause=norm.clause,
+                    source_url=norm.source_url,
                     reason=f"< {distance} м от объекта типа «{rule.obstacle_subtype or rule.obstacle_category}»",
                 )
             )

@@ -339,3 +339,31 @@ def test_concurrency_limit_returns_429_until_a_slot_frees(tmp_path):
                 break
             time.sleep(0.05)
         assert last_status == 202
+
+
+def test_norms_endpoint(client):
+    r = client.get("/norms")
+    assert r.status_code == 200
+    norms = r.json()
+    by_id = {n["id"]: n for n in norms}
+    assert len(by_id) == len(norms)
+    gas_shrub = by_id["743-pp-gas-shrub"]
+    assert gas_shrub["plant_type"] == "shrub"
+    assert gas_shrub["basis"] == "service_default"
+    assert gas_shrub["clause"] is None
+    building = by_id["743-pp-building-tree"]
+    assert (building["obstacle_category"], building["distance_m"]) == ("buildings", 5.0)
+    assert building["clause"].startswith("п. 3.6.3, табл. 3.6.1")
+    assert building["source_url"].startswith("https://")
+
+
+def test_project_name_and_description_limits(client):
+    assert _create_project(client, name="  Сквер  ").json()["name"] == "Сквер"
+    assert _create_project(client, name="   ").status_code == 422
+    assert _create_project(client, name="x" * 121).status_code == 422
+    assert _create_project(client, name="x" * 120).status_code == 201
+    assert _create_project(client, description="d" * 1001).status_code == 422
+    pid = _create_project(client).json()["id"]
+    assert client.patch(f"/projects/{pid}", json={"name": ""}).status_code == 422
+    assert client.patch(f"/projects/{pid}", json={"description": "d" * 1001}).status_code == 422
+    assert client.patch(f"/projects/{pid}", json={"name": " B "}).json()["name"] == "B"

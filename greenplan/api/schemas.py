@@ -2,17 +2,22 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from greenplan.api.jobs import GeoreferenceInfo, JobError, JobRecord
 from greenplan.api.plantings import ExportError, PlantingVersion
 
 
+# Surrounding whitespace is trimmed; a blank name is rejected (422).
+ProjectName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
+ProjectDescription = Annotated[str, StringConstraints(max_length=1000)]
+
+
 class ProjectCreateRequest(BaseModel):
-    name: str
-    description: str | None = None
+    name: ProjectName
+    description: ProjectDescription | None = None
     # (minx, miny, maxx, maxy), WGS84 lon/lat: an approximate bbox of the
     # project site, required to disambiguate geobridge.ru geodetic-point
     # matches during the mandatory georeferencing stage -- see
@@ -22,8 +27,8 @@ class ProjectCreateRequest(BaseModel):
 
 
 class ProjectUpdateRequest(BaseModel):
-    name: str | None = None
-    description: str | None = None
+    name: ProjectName | None = None
+    description: ProjectDescription | None = None
 
 
 class JobStatus(BaseModel):
@@ -149,3 +154,48 @@ class ExplanationEntry(BaseModel):
         "zones for edits, so their placement is not verified against setback norms.",
     )
     note: str | None = Field(default=None, description="Human-readable (Russian) note for edited points.")
+
+
+# -- Obstacles GeoJSON (read-only response documentation, as above) --
+
+
+class ObstacleGeometry(BaseModel):
+    type: Literal["Point", "LineString", "MultiLineString", "Polygon", "MultiPolygon"]
+    coordinates: list = Field(description="Same CRS as `/zones`: WGS84 lon/lat, or drawing x/y.")
+
+
+class ObstacleProperties(BaseModel):
+    """As in the parse output, minus the server-side `source_file`. Extra
+    keys may be present (`label` for geodetic points, `elevation` for
+    contours, Overture attributes for fused buildings/roads)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    rule_id: str = Field(description="Parser rule (`rules/default.yaml`) that recognised the entity.")
+    category: str = Field(description="Same as `obstacle_category` in `/zones`.")
+    subtype: str | None = Field(description="Same as `obstacle_subtype` in `/zones`.")
+    status: str = Field(description="Rule status, e.g. `auto`, `proxy_low_confidence`.")
+    layer: str = Field(description="Source DXF layer.")
+    dxftype: str = Field(description="DXF entity type, e.g. `LWPOLYLINE`; `OVERTURE` for fused Overture data.")
+    handle: str | None = Field(description="DXF handle; `null` for xref/exploded-block entities.")
+
+
+class ObstacleFeature(BaseModel):
+    type: Literal["Feature"]
+    geometry: ObstacleGeometry
+    properties: ObstacleProperties
+
+
+class ObstaclesMetadata(BaseModel):
+    crs: str = Field(
+        description='"EPSG:4326 (WGS84 lon/lat)" once georeferenced; otherwise (including a '
+        'project that failed at georeferencing) "local drawing coordinates, no geo-reference available".'
+    )
+    source_insunits: int | None = Field(default=None, description="`$INSUNITS` of the root DXF.")
+    scale_to_meters: float | None = Field(default=None, description="Drawing units -> meters factor.")
+
+
+class ObstaclesFeatureCollection(BaseModel):
+    type: Literal["FeatureCollection"]
+    metadata: ObstaclesMetadata
+    features: list[ObstacleFeature]

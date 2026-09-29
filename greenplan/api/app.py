@@ -17,7 +17,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
-from greenplan.api import jobs, plantings
+from greenplan.api import jobs, obstacles, plantings
 from greenplan.api.config import Settings
 from greenplan.api.jobs import JobManager
 from greenplan.api.plantings import PlantingEdit, PlantingStore, PlantingVersion
@@ -27,6 +27,7 @@ from greenplan.api.schemas import (
     ExplanationEntry,
     ExportPendingResponse,
     JobStatus,
+    ObstaclesFeatureCollection,
     PlantingEditResponse,
     PlantingFeatureCollection,
     ProjectCreateRequest,
@@ -34,8 +35,10 @@ from greenplan.api.schemas import (
     ProjectUpdateRequest,
 )
 from greenplan.api.storage import ProjectNotFoundError, ProjectRecord, ProjectStore
+from greenplan.norms.schema import Norm, NormsTable
 
 router = APIRouter(prefix="/projects", tags=["projects"])
+norms_router = APIRouter(tags=["norms"])
 
 
 def _to_response(store: ProjectStore, record: ProjectRecord) -> ProjectResponse:
@@ -224,6 +227,48 @@ _DXF_CONTENT = {
         "content": {DXF_MEDIA_TYPE: {"schema": {"type": "string", "format": "binary"}}},
     }
 }
+
+
+@router.get(
+    "/{project_id}/obstacles",
+    response_model=ObstaclesFeatureCollection,  # registers the schema referred to below
+    response_class=Response,
+    responses={
+        200: {
+            "description": "GeoJSON FeatureCollection.",
+            "content": {
+                "application/geo+json": {"schema": {"$ref": "#/components/schemas/ObstaclesFeatureCollection"}}
+            },
+        },
+        404: {
+            "model": ErrorMessage,
+            "description": "Project not found, still processing, or failed before its drawing was parsed.",
+        },
+    },
+    summary="Recognised obstacles (utilities, buildings, kerbs, ...)",
+)
+def get_obstacles(project_id: str, request: Request) -> Response:
+    """Parsed drawing entities that have a setback norm (see `GET /norms`),
+    plus the site boundary, near the plantable area (base area plus 60 m).
+    Same CRS as `/zones`. Also available for a project that failed after
+    parsing -- e.g. at georeferencing, in drawing coordinates then."""
+    store: ProjectStore = request.app.state.store
+    _get_project_or_404(store, project_id)
+    project_dir = store.project_dir(project_id)
+    status = jobs.current_status(project_dir)
+    path = obstacles.ensure_obstacles(project_dir / "processed") if status in jobs.TERMINAL_STAGES else None
+    if path is None:
+        raise HTTPException(status_code=404, detail=f"Obstacles not available (status: {status})")
+    return FileResponse(path, media_type="application/geo+json")
+
+
+@norms_router.get("/norms", response_model=list[Norm], summary="Setback norms")
+def get_norms(request: Request) -> list[Norm]:
+    """Every setback norm zoning applies, one record per obstacle type and
+    plant type. `basis: service_default` marks the service's own
+    conservative value where the act sets none (`clause` is then `null`);
+    prohibited zones in `/zones` refer to these by `norm_id`."""
+    return request.app.state.norms.norms()
 
 
 def _latest_version_id(request: Request, project_dir: Path) -> int:
@@ -469,6 +514,7 @@ def create_app(
         app.state.store = store
         app.state.jobs = JobManager(executor, settings.max_concurrent_jobs, job_fn=job_fn, export_fn=export_fn)
         app.state.plantings = PlantingStore()
+        app.state.norms = NormsTable.load()
         try:
             yield
         finally:
@@ -484,6 +530,7 @@ def create_app(
         expose_headers=["Content-Disposition"],
     )
     app.include_router(router)
+    app.include_router(norms_router)
     return app
 
 

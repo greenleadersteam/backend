@@ -31,6 +31,7 @@ from typing import Callable
 
 from pydantic import BaseModel, field_validator
 
+from greenplan.api import obstacles as obstacles_file
 from greenplan.api import plantings
 from greenplan.api._yamlio import atomic_write_yaml, read_yaml
 from greenplan.api.config import Settings
@@ -263,6 +264,7 @@ def run_processing_job(project_dir: Path) -> None:
     from greenplan.pipeline import (
         fuse_with_overture,
         georeference_feature_collection,
+        load_default_norms,
         load_default_planting_rules,
         parse_folder,
         plant_folder,
@@ -274,6 +276,17 @@ def run_processing_job(project_dir: Path) -> None:
 
     def set_stage(stage: str) -> None:
         _write_stage(project_dir, stage=stage, started_at=started_at)
+
+    def write_parsed(fc, crs_label: str, norms) -> dict:
+        """parsed.geojson + obstacles.geojson (not yet clipped to the site:
+        that needs zoning); returns the obstacles for the final write."""
+        parsed = feature_collection_to_geojson(fc, crs=crs_label)
+        (processed_dir / obstacles_file.PARSED_FILENAME).write_text(
+            json.dumps(parsed, ensure_ascii=False), encoding="utf-8"
+        )
+        unclipped = obstacles_file.obstacles_geojson(parsed, norms)
+        obstacles_file.write_obstacles(processed_dir, unclipped)
+        return unclipped
 
     try:
         set_stage(STAGE_EXTRACTING)
@@ -292,6 +305,11 @@ def run_processing_job(project_dir: Path) -> None:
 
         set_stage(STAGE_PARSING)
         fc, _coverage = parse_folder(raw_dir)
+        norms = load_default_norms()
+        # Written in the drawing's frame right away (and replaced by WGS84
+        # below), so a project that fails at georeferencing still has its
+        # obstacles -- the frontend's manual-georeferencing fallback uses them.
+        obstacles = write_parsed(fc, NO_CRS_LABEL, norms)
 
         bbox_user = _read_bbox_user(project_dir)
         geo_result = None
@@ -312,18 +330,13 @@ def run_processing_job(project_dir: Path) -> None:
         if geo_result is not None:
             crs_label = WGS84_CRS_LABEL
             to_wgs84 = reproject_fn(geo_result.utm_crs)
-            parsed_export_fc = transform_feature_collection(fc, to_wgs84)
+            obstacles = write_parsed(transform_feature_collection(fc, to_wgs84), crs_label, norms)
         else:
             crs_label = NO_CRS_LABEL
-            parsed_export_fc = fc
-        (processed_dir / "parsed.geojson").write_text(
-            json.dumps(feature_collection_to_geojson(parsed_export_fc, crs=crs_label), ensure_ascii=False),
-            encoding="utf-8",
-        )
 
         set_stage(STAGE_ZONING_LAYOUT)
         planting_rules = load_default_planting_rules()
-        zoning, points, explanations = plant_folder(fc, planting_rules=planting_rules)
+        zoning, points, explanations = plant_folder(fc, norms=norms, planting_rules=planting_rules)
 
         set_stage(STAGE_EXPORTING)
         if geo_result is not None:
@@ -338,6 +351,9 @@ def run_processing_job(project_dir: Path) -> None:
         (processed_dir / "zones.geojson").write_text(
             json.dumps(zoning_result_to_geojson(zoning_out, crs=crs_label), ensure_ascii=False), encoding="utf-8"
         )
+        site = zoning_out.base_area
+        extent = None if site is None or site.is_empty else site.bounds
+        obstacles_file.write_obstacles(processed_dir, obstacles_file.obstacles_geojson(obstacles, norms, extent))
         (processed_dir / "planting.geojson").write_text(
             json.dumps(planting_points_to_geojson(points_out, crs=crs_label), ensure_ascii=False), encoding="utf-8"
         )

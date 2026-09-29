@@ -122,3 +122,17 @@ def test_detect_root_stays_ambiguous_with_two_independent_self_contained_files(t
 
     with pytest.raises(SystemExit):
         dxf_source.detect_root([a, b])
+
+
+def test_discover_dxf_files_ignores_extension_case(tmp_path):
+    (tmp_path / "ПЛАН.DXF").touch()
+    (tmp_path / "b.Dxf").touch()
+    (tmp_path / "c.dwg").touch()
+    assert [p.name for p in dxf_source.discover_dxf_files(tmp_path)] == ["b.Dxf", "ПЛАН.DXF"]
+
+
+def test_resolve_xref_ignores_extension_case(tmp_path):
+    root_file = tmp_path / "root.dxf"
+    root_file.touch()
+    (tmp_path / "Foo.DXF").touch()
+    assert dxf_source.resolve_xref("foo", root_file) == tmp_path / "Foo.DXF"

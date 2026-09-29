@@ -40,7 +40,7 @@ def is_under_paxheader(path: Path) -> bool:
 
 def discover_dxf_files(folder: Path) -> list[Path]:
     return sorted(
-        p for p in folder.rglob("*.dxf")
+        p for p in folder.rglob("*.dxf", case_sensitive=False)
         if p.is_file() and not is_under_paxheader(p)
     )
 
@@ -124,7 +124,7 @@ def resolve_xref(name: str, root_file: Path) -> Path | None:
     name_lower = name.lower()
     base = root_file.parent
     candidates = sorted(
-        (p for p in base.rglob("*.dxf") if p.stem.lower() == name_lower and not is_under_paxheader(p)),
+        (p for p in base.rglob("*.dxf", case_sensitive=False) if p.stem.lower() == name_lower and not is_under_paxheader(p)),
         key=lambda p: len(p.relative_to(base).parts),
     )
     if not candidates:
