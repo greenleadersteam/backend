@@ -97,7 +97,11 @@ def append_planting_layer(
             radius,
             dxfattribs={"layer": layer_name},
         )
-        circle.set_xdata(XDATA_APPID, [(1000, pt.plant_type), (1000, pt.rule_id), (1000, pt.id)])
+        # kind appended last so readers of the original 3-value layout keep working.
+        circle.set_xdata(
+            XDATA_APPID,
+            [(1000, pt.plant_type), (1000, pt.rule_id or ""), (1000, pt.id), (1000, pt.kind)],
+        )
 
     doc.saveas(str(out_path), fmt=out_fmt)
     return orig_count, len(msp) - orig_count

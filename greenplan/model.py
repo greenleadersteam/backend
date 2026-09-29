@@ -82,4 +82,7 @@ class PlantingPoint(BaseModel):
     id: str
     geometry: BaseGeometry  # Point
     plant_type: str  # "tree" | "shrub"
-    rule_id: str
+    # None for manually placed points (see greenplan.api.plantings) -- no
+    # layout rule put them there.
+    rule_id: str | None
+    kind: str = "auto"  # "auto" (layout engine) | "manual" (user edit)

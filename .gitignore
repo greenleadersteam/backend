@@ -220,3 +220,4 @@ __marimo__/
 # greenplan API's default local data_dir (GREENPLAN_API_DATA_DIR): uploaded
 # projects, extracted DXFs, processed output -- never meant to be committed
 /data/
+/код_и_контекст

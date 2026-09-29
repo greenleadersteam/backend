@@ -31,6 +31,7 @@ from typing import Callable
 
 from pydantic import BaseModel, field_validator
 
+from greenplan.api import plantings
 from greenplan.api._yamlio import atomic_write_yaml, read_yaml
 from greenplan.api.config import Settings
 from greenplan.api.storage import METADATA_FILENAME, ProjectRecord
@@ -344,6 +345,8 @@ def run_processing_job(project_dir: Path) -> None:
             json.dumps(explanations_out, ensure_ascii=False), encoding="utf-8"
         )
         append_planting_layer(Path(fc.root_file), dxf_points, processed_dir / "planting.dxf")
+        _write_export_context(processed_dir, raw_dir, Path(fc.root_file), geo_result)
+        plantings.create_first_version(processed_dir)
 
         georeference_info = (
             GeoreferenceInfo(
@@ -369,6 +372,90 @@ def run_processing_job(project_dir: Path) -> None:
         )
 
 
+def _write_export_context(processed_dir: Path, raw_dir: Path, root_file: Path, geo_result) -> None:
+    """What run_version_export_job needs later to put edited (WGS84) points
+    back into the root drawing's local frame. The fitted transform only
+    exists during this job, so it has to be saved now.
+    """
+    try:
+        root_rel = str(root_file.resolve().relative_to(raw_dir.resolve()))
+    except ValueError:
+        root_rel = str(root_file.resolve())
+    context: dict = {"root_file": root_rel}
+    if geo_result is not None:
+        context.update(
+            frame="utm",
+            utm_crs=geo_result.utm_crs,
+            utm_to_local=geo_result.utm_to_local.params.tolist(),
+        )
+    else:
+        context["frame"] = "local"
+    atomic_write_yaml(processed_dir / plantings.EXPORT_CONTEXT_FILENAME, context)
+
+
+def run_version_export_job(version_dir: Path) -> None:
+    """Build planting.dxf and explanation.json for one saved planting
+    version (2+) and record the outcome in its metadata.yaml export_status.
+    Same rules as run_processing_job: top-level, picklable, heavy imports
+    deferred, never lets an exception escape.
+    """
+    import numpy as np
+    from skimage.transform import EuclideanTransform
+
+    from greenplan.explain.builder import build_explanations
+    from greenplan.export.planting import geojson_to_planting_points
+    from greenplan.georeference.apply import euclidean_transform_fn, reproject_fn, transform_planting_points
+    from greenplan.io.dxf_sink import append_planting_layer
+    from greenplan.pipeline import load_default_planting_rules
+
+    processed_dir = version_dir.parent.parent
+    raw_dir = processed_dir.parent / "raw"
+    try:
+        context = read_yaml(processed_dir / plantings.EXPORT_CONTEXT_FILENAME)
+
+        def load_points(vdir: Path):
+            data = json.loads((vdir / plantings.GEOJSON_FILENAME).read_text(encoding="utf-8"))
+            added = {
+                f["properties"]["id"]: f["properties"]["added_in_version"]
+                for f in data["features"]
+                if "added_in_version" in f["properties"]
+            }
+            return geojson_to_planting_points(data), added
+
+        points, added_in_version = load_points(version_dir)
+        original, _ = load_points(plantings.version_dir(processed_dir, 1))
+        if context["frame"] == "utm":
+            to_utm = reproject_fn("EPSG:4326", context["utm_crs"])
+            to_local = euclidean_transform_fn(EuclideanTransform(matrix=np.array(context["utm_to_local"])))
+
+            def to_drawing(pts):
+                return transform_planting_points(transform_planting_points(pts, to_utm), to_local)
+
+            points, original = to_drawing(points), to_drawing(original)
+
+        tmp_dxf = version_dir / (plantings.DXF_FILENAME + ".tmp")
+        append_planting_layer(raw_dir / context["root_file"], points, tmp_dxf)
+        tmp_dxf.replace(version_dir / plantings.DXF_FILENAME)
+
+        explanations = build_explanations(
+            points,
+            load_default_planting_rules(),
+            original_points={p.id: p for p in original},
+            added_in_version=added_in_version,
+        )
+        (version_dir / plantings.EXPLANATION_FILENAME).write_text(
+            json.dumps(explanations, ensure_ascii=False), encoding="utf-8"
+        )
+        plantings.set_export_status(version_dir, plantings.EXPORT_READY)
+    except BaseException as exc:
+        traceback.print_exc()
+        plantings.set_export_status(
+            version_dir,
+            plantings.EXPORT_FAILED,
+            plantings.ExportError(code="export_failed", message=f"{type(exc).__name__}: {exc}"),
+        )
+
+
 class JobManager:
     """Gates how many jobs may run at once and hands work off to an
     Executor. The executor is injected so production can use a
@@ -381,10 +468,12 @@ class JobManager:
         executor: Executor,
         max_concurrent: int,
         job_fn: Callable[[Path], None] = run_processing_job,
+        export_fn: Callable[[Path], None] = run_version_export_job,
     ):
         self._executor = executor
         self._max_concurrent = max_concurrent
         self._job_fn = job_fn
+        self._export_fn = export_fn
         self._active = 0
         self._lock = threading.Lock()
 
@@ -403,6 +492,28 @@ class JobManager:
         future = self._executor.submit(self._job_fn, project_dir)
         future.add_done_callback(lambda f: self._on_done(f, project_dir))
         return future
+
+    def submit_version_export(self, version_dir: Path) -> Future:
+        """Caller must have acquired a slot (try_acquire) and marked the
+        version pending; shares the concurrency limit with processing jobs.
+        """
+        future = self._executor.submit(self._export_fn, version_dir)
+        future.add_done_callback(lambda f: self._on_export_done(f, version_dir))
+        return future
+
+    def _on_export_done(self, future: Future, version_dir: Path) -> None:
+        self.release()
+        exc = future.exception()
+        if exc is None:
+            return
+        # Same as _on_done: only reached if the worker process itself died.
+        version = plantings.read_version_metadata(version_dir)
+        if version is not None and version.export_status == plantings.EXPORT_PENDING:
+            plantings.set_export_status(
+                version_dir,
+                plantings.EXPORT_FAILED,
+                plantings.ExportError(code="export_failed", message=f"Worker process failed: {exc!r}"),
+            )
 
     def _on_done(self, future: Future, project_dir: Path) -> None:
         self.release()
